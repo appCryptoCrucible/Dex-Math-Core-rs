@@ -1,0 +1,237 @@
+{
+  "schema_version": 1,
+  "description": "Per-pool Curve taxonomy and execution policy. Sync with contracts EthereumMainnetCurvePools for execution_blocked=false entries. Do not set execution_blocked=false without fork verification.",
+  "pools": [
+    {
+      "name": "3pool",
+      "address": "0xbEbc44782C7dB0a1A60Cb6fe97d0b483032FF1C7",
+      "family": "StableSwapN",
+      "n_coins": 3,
+      "quoting_strategy": "LocalCurveMath",
+      "stableswap_math_variant": "vyper_0_2_three_pool",
+      "execution_kind": "exchange_int128",
+      "fee_encoding": "curve_fee_1e10",
+      "execution_blocked": false,
+      "notes": "Classic3-coin stable pool (DAI/USDC/USDT). Local quote: curve-math StableSwapV1.",
+      "verification_refs": [
+        "https://curve.fi/#/ethereum/pools"
+      ]
+    },
+    {
+      "name": "compound_usdt_legacy",
+      "address": "0x52EA46506B9CC5Ef470C5bf89f17Dc28bB35D85C",
+      "family": "StableSwapN",
+      "n_coins": 3,
+      "quoting_strategy": "LocalCurveMath",
+      "stableswap_math_variant": "vyper_0_1_legacy",
+      "execution_kind": "exchange_int128",
+      "fee_encoding": "curve_fee_1e10",
+      "execution_blocked": false,
+      "notes": "StableSwapUSDT.vy (0.1.x): cDAI/cUSDC/USDT. Local quote: curve-math StableSwapV0 + `_stored_rates` from pool_manager.",
+      "verification_refs": [
+        "https://curve.readthedocs.io/ref-addresses.html",
+        "https://etherscan.io/address/0x52ea46506b9cc5ef470c5bf89f17dc28bb35d85c"
+      ]
+    },
+    {
+      "name": "susd_v1",
+      "address": "0xA5407eAE9Ba41422680e2e00537571bcC53efBfD",
+      "family": "StableSwapN",
+      "n_coins": 4,
+      "quoting_strategy": "LocalCurveMath",
+      "stableswap_math_variant": "vyper_0_1_legacy",
+      "execution_kind": "exchange_int128",
+      "fee_encoding": "curve_fee_1e10",
+      "execution_blocked": false,
+      "notes": "StableSwapSUSD.vy: static rates when USE_LENDING is false. Local quote: curve-math StableSwapV0.",
+      "verification_refs": [
+        "https://curve.readthedocs.io/ref-addresses.html",
+        "https://etherscan.io/address/0xa5407eae9ba41422680e2e00537571bcc53efbfd"
+      ]
+    },
+    {
+      "name": "stETH_ETH_legacy",
+      "address": "0xDC24316b9AE028F1497c275EB9192a3Ea0f67022",
+      "family": "LsdEthPool",
+      "n_coins": 2,
+      "quoting_strategy": "LocalCurveMath",
+      "execution_kind": "exchange_int128",
+      "fee_encoding": "curve_fee_1e10",
+      "execution_blocked": false,
+      "notes": "stETH/ETH. Rebasing/rates; use get_dy on fork until analytic spec is proven.",
+      "verification_refs": [
+        "https://curve.fi/#/ethereum/pools"
+      ]
+    },
+    {
+      "name": "rETH_ETH",
+      "address": "0xF9440930043eb3997fc70e1339dBb11F341de7A8",
+      "family": "LsdEthPool",
+      "n_coins": 2,
+      "quoting_strategy": "LocalCurveMath",
+      "execution_kind": "exchange_int128",
+      "fee_encoding": "curve_fee_1e10",
+      "execution_blocked": false,
+      "notes": "rETH/WETH pool; verify indices and ETH handling before execution.",
+      "verification_refs": [
+        "https://curve.fi/#/ethereum/pools"
+      ]
+    },
+    {
+      "name": "frxETH_ETH",
+      "address": "0xa1F8A6807c402E4A15ef4EBa36528A3FED24E577",
+      "family": "LsdEthPool",
+      "n_coins": 2,
+      "quoting_strategy": "LocalCurveMath",
+      "execution_kind": "exchange_int128",
+      "fee_encoding": "curve_fee_1e10",
+      "execution_blocked": false,
+      "notes": "frxETH/ETH; quoter-first.",
+      "verification_refs": [
+        "https://curve.fi/#/ethereum/pools"
+      ]
+    },
+    {
+      "name": "tricrypto2",
+      "address": "0xD51a44d3FaE010294C616388b506AcdA1bfAAE46",
+      "family": "CryptoTricrypto",
+      "n_coins": 3,
+      "quoting_strategy": "LocalCurveMath",
+      "execution_kind": "exchange_uint256",
+      "fee_encoding": "tricrypto_mid_fee",
+      "execution_blocked": false,
+      "notes": "Tricrypto uses crypto invariant; StableSwap math is invalid. Encoding uses uint256 i,j on this deployment.",
+      "verification_refs": [
+        "https://curve.fi/#/ethereum/pools"
+      ]
+    },
+    {
+      "name": "tricrypto",
+      "address": "0x80466c64868E1ab14a1Ddf27A676C3fcBE638Fe5",
+      "family": "CryptoTricrypto",
+      "n_coins": 3,
+      "quoting_strategy": "LocalCurveMath",
+      "execution_kind": "exchange_uint256",
+      "fee_encoding": "tricrypto_mid_fee",
+      "execution_blocked": false,
+      "notes": "Older tricrypto; same policy as tricrypto2.",
+      "verification_refs": [
+        "https://curve.fi/#/ethereum/pools"
+      ]
+    },
+    {
+      "name": "FRAX_USDC",
+      "address": "0xDcEF968d416a41Cdac0ED8702fAC8128A64241A2",
+      "family": "StableSwapN",
+      "n_coins": 2,
+      "quoting_strategy": "LocalCurveMath",
+      "stableswap_math_variant": "vyper_0_2_three_pool",
+      "execution_kind": "exchange_int128",
+      "fee_encoding": "curve_fee_1e10",
+      "execution_blocked": false,
+      "notes": "2-coin StableSwap (FRAX/USDC). Local quote: curve-math StableSwapV1.",
+      "verification_refs": [
+        "https://curve.fi/#/ethereum/pools"
+      ]
+    },
+    {
+      "name": "FRAX_3CRV",
+      "address": "0xd632f22692FaC7611d2AA1C0D552930D43cAEd3b",
+      "family": "MetaStableSwap",
+      "n_coins": 2,
+      "quoting_strategy": "LocalCurveMath",
+      "execution_kind": "exchange_underlying_int128",
+      "fee_encoding": "curve_fee_1e10",
+      "execution_blocked": false,
+      "notes": "Meta FRAX/3CRV: local quote via curve-math StableSwapMeta (base virtual_price); matches on-chain get_dy for pool coins. Execution may still use exchange_underlying — encoder uses execution_kind.",
+      "verification_refs": [
+        "https://curve.fi/#/ethereum/pools"
+      ]
+    },
+    {
+      "name": "crvUSD_USDC",
+      "address": "0x4DEcE678ceceb27446b35C672dC7d61F30bAD69E",
+      "family": "StableSwapV2",
+      "n_coins": 2,
+      "quoting_strategy": "LocalCurveMath",
+      "execution_kind": "exchange_int128",
+      "fee_encoding": "unknown_not_for_local_math",
+      "execution_blocked": false,
+      "notes": "crvUSD factory pool; confirm ABI and fee on fork before analytic path.",
+      "verification_refs": [
+        "https://curve.fi/#/ethereum/pools"
+      ]
+    },
+    {
+      "name": "crvUSD_USDT",
+      "address": "0x390f3595bCa2Df7d23783dFd126427CCeb997BF4",
+      "family": "StableSwapV2",
+      "n_coins": 2,
+      "quoting_strategy": "LocalCurveMath",
+      "execution_kind": "exchange_int128",
+      "fee_encoding": "unknown_not_for_local_math",
+      "execution_blocked": false,
+      "notes": "Same policy as crvUSD_USDC.",
+      "verification_refs": [
+        "https://curve.fi/#/ethereum/pools"
+      ]
+    },
+    {
+      "name": "crvUSD_FRAX",
+      "address": "0x0CD6f267b2086bea681E922E19D40512511BE538",
+      "family": "StableSwapV2",
+      "n_coins": 2,
+      "quoting_strategy": "LocalCurveMath",
+      "execution_kind": "exchange_int128",
+      "fee_encoding": "unknown_not_for_local_math",
+      "execution_blocked": false,
+      "notes": "crvUSD/FRAX StableSwap-NG (corrected pool address; prior entry had no on-chain code). Same policy as crvUSD_USDC.",
+      "verification_refs": [
+        "https://curve.fi/#/ethereum/pools"
+      ]
+    },
+    {
+      "name": "cvxCRV_CRV",
+      "address": "0x9D0464996170c6B9e75eED71c68B99dDEDf279e8",
+      "family": "StableSwapN",
+      "n_coins": 2,
+      "quoting_strategy": "LocalCurveMath",
+      "stableswap_math_variant": "vyper_0_2_three_pool",
+      "execution_kind": "exchange_int128",
+      "fee_encoding": "curve_fee_1e10",
+      "execution_blocked": false,
+      "notes": "2-coin StableSwap (cvxCRV/CRV). Local quote: curve-math StableSwapV1.",
+      "verification_refs": [
+        "https://curve.fi/#/ethereum/pools"
+      ]
+    },
+    {
+      "name": "CVX_ETH",
+      "address": "0xB576491F1E6e5E62f1d8F26062Ee822B40B0E0d4",
+      "family": "TwoCryptoNg",
+      "n_coins": 2,
+      "quoting_strategy": "LocalCurveMath",
+      "execution_kind": "exchange_uint256",
+      "fee_encoding": "tricrypto_mid_fee",
+      "execution_blocked": false,
+      "notes": "Volatile/crypto-style CVX/WETH.",
+      "verification_refs": [
+        "https://curve.fi/#/ethereum/pools"
+      ]
+    },
+    {
+      "name": "CRV_ETH",
+      "address": "0x442F37cfD85D3f35e576AD7D63bBa7Bb36fCFe4a",
+      "family": "TwoCryptoNg",
+      "n_coins": 2,
+      "quoting_strategy": "LocalCurveMath",
+      "execution_kind": "exchange_uint256",
+      "fee_encoding": "tricrypto_mid_fee",
+      "execution_blocked": false,
+      "notes": "Factory crypto CRV/frxETH (second coin is frxETH, not WETH). No 2-coin CRV+WETH pool in Curve factory-crypto listings; prior address had no code.",
+      "verification_refs": [
+        "https://curve.fi/#/ethereum/pools"
+      ]
+    }
+  ]
+}
