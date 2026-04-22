@@ -186,12 +186,10 @@ pub fn reserves_to_sqrt_price_x96(reserve_in: U256, reserve_out: U256) -> Result
 /// Formula: price_wad = sqrt_price_x96^2 * 1e18 / 2^192
 #[inline(always)]
 pub fn sqrt_price_to_price_wad(sqrt_price_x96: U256) -> Result<U256, MathError> {
-    let price = sqrt_price_to_price(sqrt_price_x96)?;
-    price.checked_mul(WAD).ok_or_else(|| MathError::Overflow {
-        operation: "sqrt_price_to_price_wad".to_string(),
-        inputs: vec![alloy_to_ethers(price), alloy_to_ethers(WAD)],
-        context: "price * WAD".to_string(),
-    })
+    // Preserve Q96 fractional precision before final WAD scaling:
+    // price_wad = (sqrt^2 / Q96) * WAD / Q96
+    let price_q96 = mul_div(sqrt_price_x96, sqrt_price_x96, Q96)?;
+    mul_div(price_q96, WAD, Q96)
 }
 
 /// Calculate V3 swap output using correct Uniswap V3 SwapMath formulas
