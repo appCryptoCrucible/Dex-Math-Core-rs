@@ -263,7 +263,35 @@ pub mod swap_math {
         fee_in_bps: u32,
         is_exact_input: bool,
         is_token0: bool,
-    ) -> i128 {
+    ) -> Result<i128, MathError> {
+        if fee_in_bps >= 10_000 {
+            return Err(MathError::InvalidInput {
+                operation: "calc_reach_amount".to_string(),
+                reason: "fee_in_bps must be < 10000".to_string(),
+                context: format!("fee_in_bps={}", fee_in_bps),
+            });
+        }
+        if current_sqrt_p.is_zero() || target_sqrt_p.is_zero() {
+            return Err(MathError::InvalidInput {
+                operation: "calc_reach_amount".to_string(),
+                reason: "sqrt prices must be non-zero".to_string(),
+                context: format!("current={}, target={}", current_sqrt_p, target_sqrt_p),
+            });
+        }
+
+        #[inline(always)]
+        fn u256_to_u128_checked(v: U256, operation: &str, context: &str) -> Result<u128, MathError> {
+            let limbs = v.as_limbs();
+            if limbs[2] != 0 || limbs[3] != 0 {
+                return Err(MathError::Overflow {
+                    operation: operation.to_string(),
+                    inputs: vec![],
+                    context: format!("{}; value={}", context, v),
+                });
+            }
+            Ok(limbs[0] as u128 | ((limbs[1] as u128) << 64))
+        }
+
         let liquidity_u256 = U256::from(liquidity);
 
         // Determine price direction
@@ -280,46 +308,69 @@ pub mod swap_math {
             // In Q96: amount0 = L * Q96 * (sqrt_P_upper - sqrt_P_lower) / (sqrt_P_upper * sqrt_P_lower)
 
             let numerator = liquidity_u256
-                .saturating_mul(Q96)
-                .saturating_mul(price_diff);
+                .checked_mul(Q96)
+                .and_then(|v| v.checked_mul(price_diff))
+                .ok_or_else(|| MathError::Overflow {
+                    operation: "calc_reach_amount".to_string(),
+                    inputs: vec![],
+                    context: "liquidity * Q96 * price_diff".to_string(),
+                })?;
 
             // Denominator: sqrt_P_upper * sqrt_P_lower
             // This is very large (Q192), so we need careful division
-            let denominator = high_price.saturating_mul(low_price) / Q96;
+            let denominator = high_price
+                .checked_mul(low_price)
+                .ok_or_else(|| MathError::Overflow {
+                    operation: "calc_reach_amount".to_string(),
+                    inputs: vec![],
+                    context: "high_price * low_price".to_string(),
+                })?
+                / Q96;
 
             if denominator.is_zero() {
-                0u128
+                return Err(MathError::DivisionByZero {
+                    operation: "calc_reach_amount".to_string(),
+                    context: "denominator for token0 path".to_string(),
+                });
             } else {
-                low_u128(numerator / denominator)
+                u256_to_u128_checked(numerator / denominator, "calc_reach_amount", "token0 amount")
             }
         } else {
             // Token1 amount formula: amount1 = L * (sqrt_P_upper - sqrt_P_lower) / Q96
-            let amount_scaled = liquidity_u256.saturating_mul(price_diff) / Q96;
-            low_u128(amount_scaled)
+            let amount_scaled = liquidity_u256
+                .checked_mul(price_diff)
+                .ok_or_else(|| MathError::Overflow {
+                    operation: "calc_reach_amount".to_string(),
+                    inputs: vec![],
+                    context: "liquidity * price_diff".to_string(),
+                })?
+                / Q96;
+            u256_to_u128_checked(amount_scaled, "calc_reach_amount", "token1 amount")
         };
 
         // Exact input: `amount` is net liquidity delta; gross input must satisfy
         // gross * (10000 - fee) / 10000 = net.
-        if is_exact_input && fee_in_bps < 10000 {
+        if is_exact_input {
             let denom = U256::from((10000u32 - fee_in_bps) as u64);
-            amount = low_u128(
-                U256::from(amount)
+            amount = u256_to_u128_checked(
+                U256::from(amount?)
                     .checked_mul(U256::from(10000u64))
-                    .unwrap_or(U256::MAX)
+                    .ok_or_else(|| MathError::Overflow {
+                        operation: "calc_reach_amount".to_string(),
+                        inputs: vec![],
+                        context: "gross-up multiply by 10000".to_string(),
+                    })?
                     / denom,
-            );
-        } else if is_exact_input && fee_in_bps >= 10000 {
-            tracing::warn!(
-                target: "kyber_math",
-                fee_in_bps,
-                "calc_reach_amount: fee_in_bps >= 10000; skipping gross-up"
+                "calc_reach_amount",
+                "grossed amount",
             );
         }
 
+        let amount = amount?;
         if is_exact_input {
-            amount as i128
+            Ok(amount as i128)
         } else {
-            -(amount as i128)
+            Ok(-(amount as i128))
         }
     }
 }
