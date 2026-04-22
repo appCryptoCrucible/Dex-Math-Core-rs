@@ -114,6 +114,8 @@ pub trait DexAdapter {
 /// Helper functions for common calculations
 pub mod helpers {
     use super::*;
+    use crate::dex::common::{alloy_to_ethers, ethers_to_alloy};
+    use uniswap_v3_math::full_math;
 
     const WAD: U256 = U256([1_000_000_000_000_000_000u64, 0, 0, 0]);
 
@@ -132,10 +134,32 @@ pub mod helpers {
 
         match direction {
             SwapDirection::Token0ToToken1 => {
-                Ok(amount_out * WAD / amount_in)
+                let numerator = ethers_to_alloy(amount_out);
+                let denominator = ethers_to_alloy(amount_in);
+                let execution_price = full_math::mul_div(numerator, ethers_to_alloy(WAD), denominator)
+                    .map_err(|e| MathError::Overflow {
+                        operation: "calculate_execution_price".to_string(),
+                        inputs: vec![amount_out, WAD, amount_in],
+                        context: format!("Token0ToToken1 mul_div failed: {}", e),
+                    })?;
+                Ok(alloy_to_ethers(execution_price))
             }
             SwapDirection::Token1ToToken0 => {
-                Ok(amount_in * WAD / amount_out)
+                if amount_out.is_zero() {
+                    return Err(MathError::DivisionByZero {
+                        operation: "calculate_execution_price".to_string(),
+                        context: "amount_out is zero for Token1ToToken0".to_string(),
+                    });
+                }
+                let numerator = ethers_to_alloy(amount_in);
+                let denominator = ethers_to_alloy(amount_out);
+                let execution_price = full_math::mul_div(numerator, ethers_to_alloy(WAD), denominator)
+                    .map_err(|e| MathError::Overflow {
+                        operation: "calculate_execution_price".to_string(),
+                        inputs: vec![amount_in, WAD, amount_out],
+                        context: format!("Token1ToToken0 mul_div failed: {}", e),
+                    })?;
+                Ok(alloy_to_ethers(execution_price))
             }
         }
     }

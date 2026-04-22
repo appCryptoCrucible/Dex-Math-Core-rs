@@ -39,7 +39,6 @@ pub const MAX_TICK: i32 = 887272;
 pub const MIN_SQRT_RATIO: u128 = 4295128739;
 
 const U256_ZERO: U256 = U256::ZERO;
-const U256_ONE: U256 = U256::from_limbs([1, 0, 0, 0]);
 const BPS_DENOM: U256 = U256::from_limbs([10_000, 0, 0, 0]);
 /// 1 << 96 (Q64.96 fixed-point scale)
 const Q96: U256 = U256::from_limbs([0, 0x1_0000_0000, 0, 0]);
@@ -151,29 +150,8 @@ pub fn calculate_v3_price_impact(
 pub fn sqrt_price_to_price(sqrt_price_x96: U256) -> Result<U256, MathError> {
     // sqrt_price_x96 is in Q64.96 format
     // Price = (sqrt_price_x96 / 2^96)^2 = sqrt_price_x96^2 / 2^192
-
-    // First, square the sqrt_price (this gives us price * 2^192)
-    let sqrt_squared =
-        sqrt_price_x96
-            .checked_mul(sqrt_price_x96)
-            .ok_or_else(|| MathError::Overflow {
-                operation: "sqrt_price_to_price".to_string(),
-                inputs: vec![alloy_to_ethers(sqrt_price_x96)],
-                context: "Squaring sqrt_price".to_string(),
-            })?;
-
-    // Divide by 2^192 to get the actual price
-    // 2^192 = 2^64 * 2^64 * 2^64
-    let two_pow_64: U256 = U256_ONE << 64;
-    let two_pow_128 = two_pow_64.checked_mul(two_pow_64).unwrap();
-    let two_pow_192 = two_pow_128.checked_mul(two_pow_64).unwrap();
-
-    sqrt_squared
-        .checked_div(two_pow_192)
-        .ok_or_else(|| MathError::DivisionByZero {
-            operation: "sqrt_price_to_price".to_string(),
-            context: "Dividing by 2^192".to_string(),
-        })
+    // Use full-precision mulDiv to avoid overflow when squaring large sqrt prices.
+    mul_div(sqrt_price_x96, sqrt_price_x96, Q192)
 }
 
 /// Calculate sqrt_price_x96 from reserve amounts (inverse of price calculation)
@@ -208,14 +186,12 @@ pub fn reserves_to_sqrt_price_x96(reserve_in: U256, reserve_out: U256) -> Result
 /// Formula: price_wad = sqrt_price_x96^2 * 1e18 / 2^192
 #[inline(always)]
 pub fn sqrt_price_to_price_wad(sqrt_price_x96: U256) -> Result<U256, MathError> {
-    let sqrt_squared = sqrt_price_x96
-        .checked_mul(sqrt_price_x96)
-        .ok_or_else(|| MathError::Overflow {
-            operation: "sqrt_price_to_price_wad".to_string(),
-            inputs: vec![alloy_to_ethers(sqrt_price_x96)],
-            context: "sqrt_price_x96^2".to_string(),
-        })?;
-    mul_div(sqrt_squared, WAD, Q192)
+    let price = sqrt_price_to_price(sqrt_price_x96)?;
+    price.checked_mul(WAD).ok_or_else(|| MathError::Overflow {
+        operation: "sqrt_price_to_price_wad".to_string(),
+        inputs: vec![alloy_to_ethers(price), alloy_to_ethers(WAD)],
+        context: "price * WAD".to_string(),
+    })
 }
 
 /// Calculate V3 swap output using correct Uniswap V3 SwapMath formulas
@@ -344,7 +320,6 @@ pub fn calculate_v3_amount_out(
 /// * `frontrun_amount` - Amount of input token for the swap
 /// * `sqrt_price_x96` - Current sqrt price in Q64.96 format
 /// * `liquidity` - Active liquidity in the current tick range
-/// * `tick` - Current tick (will be recalculated from new sqrt price)
 /// * `fee_bps` - Fee in basis points (e.g., 300 for 0.3%)
 /// * `direction` - Swap direction (Token0ToToken1 or Token1ToToken0)
 ///
@@ -355,7 +330,6 @@ pub fn calculate_v3_post_swap_state(
     frontrun_amount: U256,
     sqrt_price_x96: U256,
     liquidity: u128,
-    tick: i32,
     fee_bps: BasisPoints,
     direction: SwapDirection,
 ) -> Result<(U256, i32), MathError> {
@@ -409,7 +383,7 @@ pub fn calculate_v3_post_swap_state(
 
     if amount_in_after_fee.is_zero() {
         // If amount after fee is zero, price doesn't change
-        return Ok((sqrt_price_x96, tick));
+        return Ok((sqrt_price_x96, sqrt_price_to_tick(sqrt_price_x96)?));
     }
 
     // Canonical crate functions for sqrt price update
@@ -585,13 +559,20 @@ fn find_next_initialized_tick(
     tick_spacing: i32,
     zero_for_one: bool,
 ) -> Result<i32, MathError> {
+    if tick_spacing <= 0 {
+        return Err(MathError::InvalidInput {
+            operation: "find_next_initialized_tick".to_string(),
+            reason: "tick_spacing must be > 0".to_string(),
+            context: format!("tick_spacing={}", tick_spacing),
+        });
+    }
     if zero_for_one {
         // Downward: largest initialized tick strictly below current_tick
         let pos = initialized_ticks.partition_point(|&t| t < current_tick);
         if pos > 0 {
             Ok(initialized_ticks[pos - 1])
         } else {
-            Ok(((current_tick / tick_spacing) - 1) * tick_spacing)
+            Ok((current_tick.div_euclid(tick_spacing) - 1) * tick_spacing)
         }
     } else {
         // Upward: smallest initialized tick strictly above current_tick
@@ -599,7 +580,7 @@ fn find_next_initialized_tick(
         if pos < initialized_ticks.len() {
             Ok(initialized_ticks[pos])
         } else {
-            Ok(((current_tick / tick_spacing) + 1) * tick_spacing)
+            Ok((current_tick.div_euclid(tick_spacing) + 1) * tick_spacing)
         }
     }
 }
@@ -891,7 +872,6 @@ mod tests {
             frontrun_amount,
             sqrt_price_x96,
             liquidity,
-            tick,
             fee_bps,
             SwapDirection::Token0ToToken1,
         )
@@ -917,7 +897,6 @@ mod tests {
             frontrun_amount,
             sqrt_price_x96,
             liquidity,
-            tick,
             fee_bps,
             SwapDirection::Token1ToToken0,
         )
@@ -935,7 +914,6 @@ mod tests {
         let frontrun_amount = U256::from(1000_000_000_000_000_000u128);
         let sqrt_price_x96 = U256::from(79228162514264337593543950336u128);
         let liquidity = 1_000_000_000_000_000_000_000u128;
-        let tick = 0;
         let fee_bps = BasisPoints::new_const(300);
 
         // Calculate using post_frontrun_state
@@ -943,7 +921,6 @@ mod tests {
             frontrun_amount,
             sqrt_price_x96,
             liquidity,
-            tick,
             fee_bps,
             SwapDirection::Token0ToToken1,
         )
@@ -972,14 +949,12 @@ mod tests {
         // Test that zero input returns error
         let sqrt_price_x96 = U256::from(79228162514264337593543950336u128);
         let liquidity = 1_000_000_000_000_000_000_000u128;
-        let tick = 0;
         let fee_bps = BasisPoints::new_const(300);
 
         let result = calculate_v3_post_swap_state(
             U256_ZERO,
             sqrt_price_x96,
             liquidity,
-            tick,
             fee_bps,
             SwapDirection::Token0ToToken1,
         );
@@ -996,14 +971,12 @@ mod tests {
         // Test that zero liquidity returns error
         let frontrun_amount = U256::from(1000_000_000_000_000_000u128);
         let sqrt_price_x96 = U256::from(79228162514264337593543950336u128);
-        let tick = 0;
         let fee_bps = BasisPoints::new_const(300);
 
         let result = calculate_v3_post_swap_state(
             frontrun_amount,
             sqrt_price_x96,
             0,
-            tick,
             fee_bps,
             SwapDirection::Token0ToToken1,
         );
@@ -1021,14 +994,12 @@ mod tests {
         let frontrun_amount = U256::from(1000_000_000_000_000_000u128);
         let sqrt_price_x96 = U256::from(79228162514264337593543950336u128); // tick = 0
         let liquidity = 1_000_000_000_000_000_000_000u128;
-        let tick = 0;
         let fee_bps = BasisPoints::new_const(300);
 
         let (new_sqrt_price, new_tick) = calculate_v3_post_swap_state(
             frontrun_amount,
             sqrt_price_x96,
             liquidity,
-            tick,
             fee_bps,
             SwapDirection::Token0ToToken1,
         )
@@ -1354,7 +1325,6 @@ mod tests {
             frontrun_amount,
             sqrt_price_x96,
             liquidity,
-            tick,
             fee_bps,
             SwapDirection::Token0ToToken1,
         )
@@ -1388,7 +1358,6 @@ mod tests {
             frontrun_amount,
             sqrt_price_x96,
             liquidity,
-            tick,
             fee_bps,
             SwapDirection::Token1ToToken0,
         )
@@ -1430,7 +1399,6 @@ mod tests {
             very_small_amount,
             sqrt_price_x96,
             liquidity,
-            tick,
             fee_bps,
             SwapDirection::Token0ToToken1,
         )

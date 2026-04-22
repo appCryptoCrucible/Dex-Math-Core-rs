@@ -188,9 +188,13 @@ pub fn calculate_d(
         });
     }
 
-    let sum_x: U256 = balances
-        .iter()
-        .fold(ZERO, |acc, &x| acc.saturating_add(x));
+    let sum_x: U256 = balances.iter().try_fold(ZERO, |acc, &x| {
+        acc.checked_add(x).ok_or_else(|| MathError::Overflow {
+            operation: "calculate_d".to_string(),
+            inputs: vec![alloy_to_ethers(acc), alloy_to_ethers(x)],
+            context: "sum_x accumulation overflow".to_string(),
+        })
+    })?;
     if sum_x == ZERO {
         return Ok(ZERO);
     }
@@ -1382,6 +1386,8 @@ pub fn calculate_curve_post_frontrun_balances(
 
 pub fn calculate_curve_post_victim_balances(
     victim_amount: U256,
+    victim_token_in: usize,
+    victim_token_out: usize,
     balances: &[U256],
     decimals: &[u8],
     stored_rates: Option<&[U256]>,
@@ -1390,14 +1396,54 @@ pub fn calculate_curve_post_victim_balances(
     fee_raw: U256,
     fee_bps: u32,
 ) -> Result<Vec<U256>, MathError> {
-    calculate_curve_post_frontrun_balances(
+    if victim_token_in >= balances.len() || victim_token_out >= balances.len() {
+        return Err(MathError::InvalidInput {
+            operation: "calculate_curve_post_victim_balances".to_string(),
+            reason: "token index out of bounds".to_string(),
+            context: format!(
+                "in={}, out={}, balances_len={}",
+                victim_token_in,
+                victim_token_out,
+                balances.len()
+            ),
+        });
+    }
+    if victim_token_in == victim_token_out {
+        return Err(MathError::InvalidInput {
+            operation: "calculate_curve_post_victim_balances".to_string(),
+            reason: "token indices must differ".to_string(),
+            context: format!("token={}", victim_token_in),
+        });
+    }
+
+    let rates = stableswap_rates_resolve(decimals, stored_rates)?;
+    let xp = stableswap_xp_from_rates(balances, &rates)?;
+    let victim_output = calculate_dy(
+        victim_token_in,
+        victim_token_out,
         victim_amount,
-        balances,
-        decimals,
-        stored_rates,
+        &xp,
+        &rates,
         variant,
         amplification,
         fee_raw,
         fee_bps,
-    )
+    )?;
+
+    let mut new_balances = balances.to_vec();
+    new_balances[victim_token_in] = new_balances[victim_token_in]
+        .checked_add(victim_amount)
+        .ok_or_else(|| MathError::Overflow {
+            operation: "calculate_curve_post_victim_balances".to_string(),
+            inputs: vec![alloy_to_ethers(balances[victim_token_in]), alloy_to_ethers(victim_amount)],
+            context: "Balance in".to_string(),
+        })?;
+    new_balances[victim_token_out] = new_balances[victim_token_out]
+        .checked_sub(victim_output)
+        .ok_or_else(|| MathError::Underflow {
+            operation: "calculate_curve_post_victim_balances".to_string(),
+            inputs: vec![alloy_to_ethers(balances[victim_token_out]), alloy_to_ethers(victim_output)],
+            context: "Balance out".to_string(),
+        })?;
+    Ok(new_balances)
 }

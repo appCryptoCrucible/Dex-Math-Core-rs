@@ -14,7 +14,6 @@ use crate::core::MathError;
 use alloy_primitives::{I256, U256};
 use uniswap_v3_math;
 
-const Q128: U256 = U256::from_limbs([0, 0, 1, 0]); // 1 << 128
 const Q96: U256 = U256::from_limbs([0, 0x100000000, 0, 0]); // 1 << 96
 
 #[inline(always)]
@@ -46,29 +45,6 @@ pub mod tick_math {
         MAX_SQRT_RATIO
     }
 
-    /// TickMath ratio table (Q128.128), same decimal values as Uniswap V3 TickMath.sol — `from_limbs` is compile-time.
-    const TICK_RATIOS: [U256; 19] = [
-        U256::from_limbs([0xffffffffffffffff, 0xffffffff, 0, 0]),
-        U256::from_limbs([0xbac710cb295e9e1b, 0x100068db8, 0, 0]),
-        U256::from_limbs([0x68abe5f76b30fb75, 0x1000d1b9c, 0, 0]),
-        U256::from_limbs([0xa234cb0830516e51, 0x1001a37e4, 0, 0]),
-        U256::from_limbs([0x6a3f7e6073d4ef1f, 0x1002ee598, 0, 0]),
-        U256::from_limbs([0x3a943e1f3942c3bb, 0x1005d4ff5, 0, 0]),
-        U256::from_limbs([0xf383b7b7875f0f5f, 0x100d20a61, 0, 0]),
-        U256::from_limbs([0xb828615137c0329f, 0x102065f50, 0, 0]),
-        U256::from_limbs([0x92cb2434bb9e27f7, 0x104727b5c, 0, 0]),
-        U256::from_limbs([0xe96ed286dcad2de7, 0x109488f6e, 0, 0]),
-        U256::from_limbs([0x7112f25c45a4cf7f, 0x112ff5c4a, 0, 0]),
-        U256::from_limbs([0xdd58efba6516047f, 0x1267b30e0, 0, 0]),
-        U256::from_limbs([0x08b42979e3a46c6f, 0x14e61c932, 0, 0]),
-        U256::from_limbs([0x6841a2184202460f, 0x1970f8d47, 0, 0]),
-        U256::from_limbs([0x2d0ff3d203ab3e0f, 0x2073accb1, 0, 0]),
-        U256::from_limbs([0x68040fba5c5bcf8f, 0x2dd538583, 0, 0]),
-        U256::from_limbs([0xe7bff3fdd01554af, 0x4c083b74c, 0, 0]),
-        U256::from_limbs([0xaa9146585a35a517, 0x9a6d1f239, 0, 0]),
-        U256::from_limbs([0x21b92987258dea2f, 0x1838a4da34, 0, 0]),
-    ];
-
     /// Convert tick to square root price ratio
     /// Production-grade implementation matching Uniswap V3 TickMath.sol
     ///
@@ -91,94 +67,13 @@ pub mod tick_math {
             });
         }
 
-        match tick {
-            0 => return Ok(Q96),
-            -887272 => return Ok(MIN_SQRT_RATIO),
-            887272 => return Ok(MAX_SQRT_RATIO),
-            _ => {}
-        }
-
-        // Algorithm: Ported from Uniswap V3 TickMath.sol (same as Kyber)
-        let abs_tick = if tick < 0 {
-            (-tick) as u32
-        } else {
-            tick as u32
-        };
-
-        let mut ratio: U256 = if abs_tick & 0x1 != 0 {
-            TICK_RATIOS[0]
-        } else {
-            Q128
-        };
-
-        // Bit-by-bit multiplication (this is the core of TickMath)
-        if abs_tick & 0x2 != 0 {
-            ratio = mul_shr128(ratio, TICK_RATIOS[1]);
-        }
-        if abs_tick & 0x4 != 0 {
-            ratio = mul_shr128(ratio, TICK_RATIOS[2]);
-        }
-        if abs_tick & 0x8 != 0 {
-            ratio = mul_shr128(ratio, TICK_RATIOS[3]);
-        }
-        if abs_tick & 0x10 != 0 {
-            ratio = mul_shr128(ratio, TICK_RATIOS[4]);
-        }
-        if abs_tick & 0x20 != 0 {
-            ratio = mul_shr128(ratio, TICK_RATIOS[5]);
-        }
-        if abs_tick & 0x40 != 0 {
-            ratio = mul_shr128(ratio, TICK_RATIOS[6]);
-        }
-        if abs_tick & 0x80 != 0 {
-            ratio = mul_shr128(ratio, TICK_RATIOS[7]);
-        }
-        if abs_tick & 0x100 != 0 {
-            ratio = mul_shr128(ratio, TICK_RATIOS[8]);
-        }
-        if abs_tick & 0x200 != 0 {
-            ratio = mul_shr128(ratio, TICK_RATIOS[9]);
-        }
-        if abs_tick & 0x400 != 0 {
-            ratio = mul_shr128(ratio, TICK_RATIOS[10]);
-        }
-        if abs_tick & 0x800 != 0 {
-            ratio = mul_shr128(ratio, TICK_RATIOS[11]);
-        }
-        if abs_tick & 0x1000 != 0 {
-            ratio = mul_shr128(ratio, TICK_RATIOS[12]);
-        }
-        if abs_tick & 0x2000 != 0 {
-            ratio = mul_shr128(ratio, TICK_RATIOS[13]);
-        }
-        if abs_tick & 0x4000 != 0 {
-            ratio = mul_shr128(ratio, TICK_RATIOS[14]);
-        }
-        if abs_tick & 0x8000 != 0 {
-            ratio = mul_shr128(ratio, TICK_RATIOS[15]);
-        }
-        if abs_tick & 0x10000 != 0 {
-            ratio = mul_shr128(ratio, TICK_RATIOS[16]);
-        }
-        if abs_tick & 0x20000 != 0 {
-            ratio = mul_shr128(ratio, TICK_RATIOS[17]);
-        }
-        if abs_tick & 0x40000 != 0 {
-            ratio = mul_shr128(ratio, TICK_RATIOS[18]);
-        }
-
-        // Handle positive ticks (reciprocal)
-        // The bit-by-bit multiplications compute 1/sqrt(1.0001^|tick|) in Q128.128.
-        // For positive ticks we need the inverse: sqrt(1.0001^tick) = 1 / (1/sqrt(1.0001^tick))
-        // Matches Solidity: if (tick > 0) ratio = type(uint256).max / ratio
-        let result = if tick > 0 {
-            U256::MAX / ratio
-        } else {
-            ratio
-        };
-
-        // Convert from Q128.128 to Q64.96 (divide by 2^32)
-        Ok(result >> 32)
+        super::uniswap_v3_math::tick_math::get_sqrt_ratio_at_tick(tick).map_err(|e| {
+            MathError::InvalidInput {
+                operation: "get_sqrt_ratio_at_tick".to_string(),
+                reason: format!("{}", e),
+                context: "uniswap_v3_math crate".to_string(),
+            }
+        })
     }
 
     /// Convert square root price ratio to tick (delegates to canonical `uniswap_v3_math` TickMath).
@@ -207,20 +102,7 @@ pub mod tick_math {
         })
     }
 
-    /// Optimized mul-then-shift-right-128 for tick ratio calculations.
-    /// All 18 bit-by-bit multiplications divide by Q128 (1 << 128);
-    /// a right-shift is ~3x faster than a full 512-bit division.
-    #[inline(always)]
-    fn mul_shr128(a: U256, b: U256) -> U256 {
-        use primitive_types::U512;
-        use primitive_types::U256 as PrimU256;
-
-        let a_prim = PrimU256(a.into_limbs());
-        let b_prim = PrimU256(b.into_limbs());
-
-        let result = (U512::from(a_prim) * U512::from(b_prim)) >> 128;
-        U256::from_limbs([result.0[0], result.0[1], result.0[2], result.0[3]])
-    }
+    // get_sqrt_ratio_at_tick/get_tick_at_sqrt_ratio delegate to canonical TickMath.
 }
 
 /// Kyber SwapMath - Swap step calculations
@@ -368,116 +250,6 @@ pub mod swap_math {
         })
     }
 
-    /// Calculate final price after a swap amount
-    /// Based on Uniswap V3/Kyber concentrated liquidity math
-    ///
-    /// Token0 input (price decreasing): sqrt_P_new = L * sqrt_P / (L + amount * sqrt_P / Q96)
-    /// Token1 input (price increasing): sqrt_P_new = sqrt_P + amount * Q96 / L
-    #[inline(always)]
-    fn calc_final_price(
-        current_sqrt_p: U256,
-        liquidity: u128,
-        abs_amount: u128,
-        fee_in_bps: u32,
-        is_exact_input: bool,
-        is_token0: bool,
-    ) -> U256 {
-        let liquidity_u256 = U256::from(liquidity);
-        let amount = U256::from(abs_amount);
-
-        // Apply fee: amount_after_fee = amount * (10000 - fee_bps) / 10000
-        let fee_factor = U256::from(10000 - fee_in_bps);
-        let amount_after_fee = if is_exact_input {
-            amount.saturating_mul(fee_factor) / U256::from(10000u32)
-        } else {
-            amount
-        };
-
-        if is_token0 {
-            // Token0 -> Token1 (price decreases)
-            // sqrt_P_new = L * Q96 * sqrt_P / (L * Q96 + amount * sqrt_P)
-            let numerator = liquidity_u256.saturating_mul(current_sqrt_p);
-
-            // denominator = L + amount * sqrt_P / Q96
-            let amount_term = amount_after_fee.saturating_mul(current_sqrt_p) / Q96;
-            let denominator = liquidity_u256.saturating_add(amount_term);
-
-            if denominator.is_zero() {
-                current_sqrt_p
-            } else {
-                numerator / denominator
-            }
-        } else {
-            // Token1 -> Token0 (price increases)
-            // sqrt_P_new = sqrt_P + amount * Q96 / L
-            let delta = amount_after_fee.saturating_mul(Q96) / liquidity_u256;
-            current_sqrt_p.saturating_add(delta)
-        }
-    }
-
-    /// Calculate returned amount and fee for a swap
-    ///
-    /// Token0 delta: amount0 = L * Q96 * (1/sqrt_P_new - 1/sqrt_P_old)
-    ///             = L * Q96 * (sqrt_P_old - sqrt_P_new) / (sqrt_P_old * sqrt_P_new)
-    /// Token1 delta: amount1 = L * (sqrt_P_new - sqrt_P_old) / Q96
-    ///
-    /// `is_exact_input` is not used: fee is derived from `abs_amount` as the step used amount.
-    /// Do not branch on it without reconciling the full swap loop with on-chain exact-output semantics.
-    #[inline(always)]
-    fn calc_returned_amount_and_fee(
-        current_sqrt_p: U256,
-        next_sqrt_p: U256,
-        liquidity: u128,
-        abs_amount: u128,
-        fee_in_bps: u32,
-        _is_exact_input: bool,
-        is_token0: bool,
-    ) -> (i128, u128) {
-        let liquidity_u256 = U256::from(liquidity);
-
-        // Calculate fee amount
-        let fee_amount = (abs_amount as u128).saturating_mul(fee_in_bps as u128) / 10000;
-
-        // Calculate returned amount based on price difference
-        let (high_price, low_price, price_increased) = if next_sqrt_p > current_sqrt_p {
-            (next_sqrt_p, current_sqrt_p, true)
-        } else {
-            (current_sqrt_p, next_sqrt_p, false)
-        };
-
-        let price_diff = high_price - low_price;
-
-        let returned_amount = if is_token0 {
-            // Token0 amount = L * Q96 * price_diff / (sqrt_P_old * sqrt_P_new)
-            let numerator = liquidity_u256
-                .saturating_mul(Q96)
-                .saturating_mul(price_diff);
-            let denominator = current_sqrt_p.saturating_mul(next_sqrt_p);
-
-            if denominator.is_zero() {
-                0i128
-            } else {
-                let amount = low_u128(numerator / denominator);
-                if price_increased {
-                    amount as i128
-                } else {
-                    -(amount as i128)
-                }
-            }
-        } else {
-            // Token1 amount = L * price_diff / Q96
-            let amount = liquidity_u256.saturating_mul(price_diff) / Q96;
-            let amount_u128 = low_u128(amount);
-            if price_increased {
-                -(amount_u128 as i128)
-            } else {
-                amount_u128 as i128
-            }
-        };
-
-        (returned_amount, fee_amount)
-    }
-
     /// Calculate reach amount for a given liquidity and price bounds
     /// Based on Kyber/Uniswap V3 swap math formulas
     ///
@@ -575,19 +347,37 @@ pub mod liq_delta_math {
         liquidity_delta: i128,
         is_add_liquidity: bool,
     ) -> Result<u128, MathError> {
-        if is_add_liquidity && liquidity_delta > 0 {
+        if liquidity_delta == 0 {
+            return Ok(current_liquidity);
+        }
+
+        let delta_abs = liquidity_delta.unsigned_abs();
+        if is_add_liquidity {
+            if liquidity_delta < 0 {
+                return Err(MathError::InvalidInput {
+                    operation: "apply_liquidity_delta".to_string(),
+                    reason: "Liquidity delta sign must match operation direction".to_string(),
+                    context: format!("is_add={}, delta={}", is_add_liquidity, liquidity_delta),
+                });
+            }
             current_liquidity
-                .checked_add(liquidity_delta as u128)
+                .checked_add(delta_abs)
                 .ok_or_else(|| MathError::Overflow {
                     operation: "apply_liquidity_delta".to_string(),
                     inputs: vec![
                         alloy_to_ethers(U256::from(current_liquidity)),
-                        alloy_to_ethers(U256::from(liquidity_delta as u128)),
+                        alloy_to_ethers(U256::from(delta_abs)),
                     ],
                     context: "Adding liquidity would overflow u128".to_string(),
                 })
-        } else if !is_add_liquidity && liquidity_delta < 0 {
-            let delta_abs = (-liquidity_delta) as u128;
+        } else {
+            if liquidity_delta > 0 {
+                return Err(MathError::InvalidInput {
+                    operation: "apply_liquidity_delta".to_string(),
+                    reason: "Liquidity delta sign must match operation direction".to_string(),
+                    context: format!("is_add={}, delta={}", is_add_liquidity, liquidity_delta),
+                });
+            }
             current_liquidity
                 .checked_sub(delta_abs)
                 .ok_or_else(|| MathError::Underflow {
@@ -598,12 +388,6 @@ pub mod liq_delta_math {
                     ],
                     context: "Insufficient liquidity for removal".to_string(),
                 })
-        } else {
-            Err(MathError::InvalidInput {
-                operation: "apply_liquidity_delta".to_string(),
-                reason: "Liquidity delta sign must match operation direction".to_string(),
-                context: format!("is_add={}, delta={}", is_add_liquidity, liquidity_delta),
-            })
         }
     }
 }
