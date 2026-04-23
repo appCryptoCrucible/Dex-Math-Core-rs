@@ -150,6 +150,78 @@ impl V3PoolState {
     }
 }
 
+/// V4 pool state (Uniswap V4 concentrated liquidity).
+///
+/// This intentionally stores only deterministic quote-critical fields.
+/// Hook execution is not simulated here; unsupported hook/dynamic-fee
+/// pools must be rejected by adapter math unless deterministic metadata is
+/// explicitly provided.
+#[repr(align(64))]
+#[derive(Debug, Clone)]
+pub struct V4PoolState {
+    pub pool_address: Address,
+    pub token0: Address,
+    pub token1: Address,
+    pub liquidity: u128,
+    pub sqrt_price_x96: U256,
+    pub tick: i32,
+    pub fee_bps: u32, // static LP fee in basis points when hooks are inactive
+    pub tick_spacing: i32,
+    pub last_update_block: u64,
+    pub tick_liquidity_map: HashMap<i32, i128>,
+    pub initialized_ticks: Vec<i32>,
+    /// Hook contract address for the pool when enabled.
+    pub hook_address: Option<Address>,
+    /// Canonical hook class label (consumer-provided, validated by adapter).
+    pub hook_class: Option<String>,
+    // Hook metadata/policy fields for fail-closed behavior.
+    pub hooks_enabled: bool,
+    pub dynamic_fee_enabled: bool,
+    pub deterministic_fee_bps: Option<u32>,
+}
+
+impl V4PoolState {
+    pub fn new(
+        pool_address: Address,
+        token0: Address,
+        token1: Address,
+        fee_bps: u32,
+        tick_spacing: i32,
+    ) -> Self {
+        Self {
+            pool_address,
+            token0,
+            token1,
+            liquidity: 0,
+            sqrt_price_x96: U256::zero(),
+            tick: 0,
+            fee_bps,
+            tick_spacing,
+            last_update_block: 0,
+            tick_liquidity_map: HashMap::new(),
+            initialized_ticks: Vec::new(),
+            hook_address: None,
+            hook_class: None,
+            hooks_enabled: false,
+            dynamic_fee_enabled: false,
+            deterministic_fee_bps: None,
+        }
+    }
+
+    pub fn update_state(
+        &mut self,
+        liquidity: u128,
+        sqrt_price_x96: U256,
+        tick: i32,
+        block_number: u64,
+    ) {
+        self.liquidity = liquidity;
+        self.sqrt_price_x96 = sqrt_price_x96;
+        self.tick = tick;
+        self.last_update_block = block_number;
+    }
+}
+
 /// On-chain fields required by [`curve_math::Pool`] for crypto / NG pools (enriched per block in `pool_manager`).
 #[derive(Debug, Clone, Default)]
 pub struct CurveMathAux {
@@ -287,6 +359,7 @@ impl BalancerPoolState {
 pub enum PoolState {
     V2(V2PoolState),
     V3(V3PoolState),
+    V4(V4PoolState),
     Curve(CurvePoolState),
     Balancer(BalancerPoolState),
     Kyber(KyberPoolState),
@@ -297,6 +370,7 @@ impl PoolState {
         match self {
             PoolState::V2(_) => DexType::UniswapV2,
             PoolState::V3(_) => DexType::UniswapV3,
+            PoolState::V4(_) => DexType::UniswapV4,
             PoolState::Curve(_) => DexType::Curve,
             PoolState::Balancer(_) => DexType::Balancer,
             PoolState::Kyber(_) => DexType::Kyber,
@@ -307,6 +381,7 @@ impl PoolState {
         match self {
             PoolState::V2(state) => state.pool_address,
             PoolState::V3(state) => state.pool_address,
+            PoolState::V4(state) => state.pool_address,
             PoolState::Curve(state) => state.pool_address,
             PoolState::Balancer(state) => state.pool_address,
             PoolState::Kyber(state) => state.pool_address,
@@ -317,6 +392,7 @@ impl PoolState {
         match self {
             PoolState::V2(state) => state.last_update_block,
             PoolState::V3(state) => state.last_update_block,
+            PoolState::V4(state) => state.last_update_block,
             PoolState::Curve(state) => state.last_update_block,
             PoolState::Balancer(state) => state.last_update_block,
             PoolState::Kyber(state) => state.last_update_block,
@@ -361,6 +437,29 @@ mod tests {
         assert_eq!(pool.tick, 0);
         assert_eq!(pool.last_update_block, 100);
     }
+
+    #[test]
+    fn test_v4_pool_state() {
+        let mut pool = V4PoolState::new(
+            Address::zero(),
+            Address::from_low_u64_be(1),
+            Address::from_low_u64_be(2),
+            30,
+            60,
+        );
+
+        pool.update_state(
+            777_777,
+            U256::from(79228162514264337593543950336u128),
+            -12,
+            321,
+        );
+        assert_eq!(pool.liquidity, 777_777);
+        assert_eq!(pool.tick, -12);
+        assert_eq!(pool.last_update_block, 321);
+        assert!(!pool.hooks_enabled);
+        assert!(!pool.dynamic_fee_enabled);
+    }
 }
 
 /// Snapshot of pool states at a specific block
@@ -370,6 +469,7 @@ pub struct BlockStateSnapshot {
     pub block_number: u64,
     pub v2_pools: Vec<(Address, V2PoolState)>,
     pub v3_pools: Vec<(Address, V3PoolState)>,
+    pub v4_pools: Vec<(Address, V4PoolState)>,
     pub curve_pools: Vec<(Address, CurvePoolState)>,
     pub balancer_pools: Vec<(Address, BalancerPoolState)>,
     pub kyber_pools: Vec<(Address, KyberPoolState)>,

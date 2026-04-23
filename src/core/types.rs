@@ -11,6 +11,7 @@ use ethers_core::types::Address;
 pub enum DexType {
     UniswapV2,
     UniswapV3,
+    UniswapV4,
     SushiSwap,
     PancakeSwap,
     Kyber,
