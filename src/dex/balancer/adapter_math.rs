@@ -135,28 +135,31 @@ pub fn quote_exact_input(
         });
     }
 
-    let (balance_in, balance_out, weight_in, weight_out): (PrimU256, PrimU256, PrimU256, PrimU256) = match direction {
-        SwapDirection::Token0ToToken1 => (
-            to_primitive_u256(pool.balance0),
-            to_primitive_u256(pool.balance1),
-            to_primitive_u256(pool.weight0),
-            to_primitive_u256(pool.weight1),
-        ),
-        SwapDirection::Token1ToToken0 => (
-            to_primitive_u256(pool.balance1),
-            to_primitive_u256(pool.balance0),
-            to_primitive_u256(pool.weight1),
-            to_primitive_u256(pool.weight0),
-        ),
+    let balance0_before_prim = to_primitive_u256(pool.balance0);
+    let balance1_before_prim = to_primitive_u256(pool.balance1);
+    let weight0_prim = to_primitive_u256(pool.weight0);
+    let weight1_prim = to_primitive_u256(pool.weight1);
+    let amount_in_prim = to_primitive_u256(amount_in);
+    let zero_for_one = matches!(direction, SwapDirection::Token0ToToken1);
+
+    let (balance_in_before_prim, balance_out_before_prim, weight_in_prim, weight_out_prim): (
+        PrimU256,
+        PrimU256,
+        PrimU256,
+        PrimU256,
+    ) = if zero_for_one {
+        (balance0_before_prim, balance1_before_prim, weight0_prim, weight1_prim)
+    } else {
+        (balance1_before_prim, balance0_before_prim, weight1_prim, weight0_prim)
     };
 
     let swap_fee_18 = swap_fee_bps_to_18_decimal(pool.swap_fee_bps.as_u32());
     let amount_out_prim = math::calculate_swap_output(
-        to_primitive_u256(amount_in),
-        balance_in,
-        balance_out,
-        weight_in,
-        weight_out,
+        amount_in_prim,
+        balance_in_before_prim,
+        balance_out_before_prim,
+        weight_in_prim,
+        weight_out_prim,
         swap_fee_18,
     )
     .map_err(DexError::MathError)?;
@@ -204,37 +207,28 @@ pub fn quote_exact_input(
         }
     };
 
-    let spot_before = match direction {
-        SwapDirection::Token0ToToken1 => math::calculate_balancer_price(
-            to_primitive_u256(pool.balance0),
-            to_primitive_u256(pool.balance1),
-            to_primitive_u256(pool.weight0),
-            to_primitive_u256(pool.weight1),
-        ),
-        SwapDirection::Token1ToToken0 => math::calculate_balancer_price(
-            to_primitive_u256(pool.balance1),
-            to_primitive_u256(pool.balance0),
-            to_primitive_u256(pool.weight1),
-            to_primitive_u256(pool.weight0),
-        ),
-    }
+    let spot_before = math::calculate_balancer_price(
+        balance_in_before_prim,
+        balance_out_before_prim,
+        weight_in_prim,
+        weight_out_prim,
+    )
     .map(to_alloy_u256)
     .map_err(DexError::MathError)?;
 
-    let spot_after = match direction {
-        SwapDirection::Token0ToToken1 => math::calculate_balancer_price(
-            to_primitive_u256(balance0_after),
-            to_primitive_u256(balance1_after),
-            to_primitive_u256(pool.weight0),
-            to_primitive_u256(pool.weight1),
-        ),
-        SwapDirection::Token1ToToken0 => math::calculate_balancer_price(
-            to_primitive_u256(balance1_after),
-            to_primitive_u256(balance0_after),
-            to_primitive_u256(pool.weight1),
-            to_primitive_u256(pool.weight0),
-        ),
-    }
+    let balance0_after_prim = to_primitive_u256(balance0_after);
+    let balance1_after_prim = to_primitive_u256(balance1_after);
+    let (balance_in_after_prim, balance_out_after_prim) = if zero_for_one {
+        (balance0_after_prim, balance1_after_prim)
+    } else {
+        (balance1_after_prim, balance0_after_prim)
+    };
+    let spot_after = math::calculate_balancer_price(
+        balance_in_after_prim,
+        balance_out_after_prim,
+        weight_in_prim,
+        weight_out_prim,
+    )
     .map(to_alloy_u256)
     .map_err(DexError::MathError)?;
 

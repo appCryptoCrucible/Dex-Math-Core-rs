@@ -1,0 +1,6 @@
+case,baseline_ns_per_iter,optimized_ns_per_iter,speedup_x,percent_faster
+v3_cross,9827.85,4237.63,2.3192,56.88
+kyber_cross,6350.68,5994.59,1.0594,5.61
+v4_cross,6426.46,5005.07,1.2840,22.12
+curve_basic,32444.03,8197.51,3.9578,74.73
+balancer_basic,3645.88,981.92,3.7132,73.07

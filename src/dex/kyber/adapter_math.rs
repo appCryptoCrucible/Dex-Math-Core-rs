@@ -71,7 +71,10 @@ impl TryFrom<&crate::data::kyber_pool_state::KyberPoolState> for KyberPoolSnapsh
             tick_liquidity_net.insert(*k, signed);
         }
         let mut initialized_ticks: Vec<i32> = v.initialized_ticks.iter().copied().collect();
-        initialized_ticks.sort_unstable();
+        if !initialized_ticks.windows(2).all(|w| w[0] < w[1]) {
+            initialized_ticks.sort_unstable();
+            initialized_ticks.dedup();
+        }
         Ok(Self {
             sqrt_price_x96: crate::dex::common::ethers_to_alloy(v.sqrt_price_x96),
             tick: v.current_tick,
@@ -220,6 +223,36 @@ fn validate_single_range_fallback(
     }
 }
 
+#[inline(always)]
+fn init_tick_cursor(current_tick: i32, initialized_ticks: &[i32], zero_for_one: bool) -> usize {
+    if zero_for_one {
+        initialized_ticks.partition_point(|&t| t < current_tick)
+    } else {
+        initialized_ticks.partition_point(|&t| t <= current_tick)
+    }
+}
+
+#[inline(always)]
+fn next_tick_from_cursor(
+    current_tick: i32,
+    tick_spacing: i32,
+    initialized_ticks: &[i32],
+    cursor: usize,
+    zero_for_one: bool,
+) -> i32 {
+    if zero_for_one {
+        if cursor > 0 {
+            initialized_ticks[cursor - 1]
+        } else {
+            (current_tick.div_euclid(tick_spacing) - 1) * tick_spacing
+        }
+    } else if cursor < initialized_ticks.len() {
+        initialized_ticks[cursor]
+    } else {
+        (current_tick.div_euclid(tick_spacing) + 1) * tick_spacing
+    }
+}
+
 /// Deterministic exact-input quote with tick crossing and strict fail-closed checks.
 pub fn quote_exact_input(
     pool: &KyberPoolSnapshot,
@@ -315,19 +348,21 @@ pub fn quote_exact_input(
     let mut current_sqrt = pool.sqrt_price_x96;
     let mut current_tick = pool.tick;
     let mut current_liquidity = pool.liquidity;
-    let mut crossed_ticks = Vec::new();
+    let mut crossed_ticks = Vec::with_capacity(pool.initialized_ticks.len().min(128));
+    let mut tick_cursor = init_tick_cursor(current_tick, &pool.initialized_ticks, zero_for_one);
+    let fee_bps_u32 = pool.fee_bps.as_u32();
 
     for _ in 0..1024usize {
         if remaining.is_zero() {
             break;
         }
-        let next_tick = find_next_initialized_tick(
+        let next_tick = next_tick_from_cursor(
             current_tick,
-            &pool.initialized_ticks,
             pool.tick_spacing,
+            &pool.initialized_ticks,
+            tick_cursor,
             zero_for_one,
-        )
-        .map_err(DexError::MathError)?;
+        );
         let target = tick_math::get_sqrt_ratio_at_tick(next_tick).map_err(DexError::MathError)?;
         let specified_i128 = i128::try_from(remaining).map_err(|_| DexError::InvalidPool {
             reason: "remaining amount exceeds i128 range required by swap step".to_string(),
@@ -336,7 +371,7 @@ pub fn quote_exact_input(
             current_liquidity,
             current_sqrt,
             target,
-            pool.fee_bps.as_u32(),
+            fee_bps_u32,
             specified_i128,
             true,
             zero_for_one,
@@ -353,6 +388,11 @@ pub fn quote_exact_input(
             });
         }
         let used = U256::from(step.used_amount as u128);
+        if used.is_zero() && !remaining.is_zero() {
+            return Err(DexError::InvalidPool {
+                reason: "swap step made no progress while remaining input is non-zero".to_string(),
+            });
+        }
         let out = exact_input_amount_out_from_returned(step.returned_amount, "tick-crossing loop")?;
 
         amount_out_total = amount_out_total
@@ -370,7 +410,6 @@ pub fn quote_exact_input(
                 context: "remaining - used".to_string(),
             }))?;
         current_sqrt = step.next_sqrt_p;
-        current_tick = tick_math::get_tick_at_sqrt_ratio(current_sqrt).map_err(DexError::MathError)?;
 
         if step.next_sqrt_p == target && !remaining.is_zero() {
             let liq_net = pool.tick_liquidity_net.get(&next_tick).ok_or_else(|| DexError::InvalidPool {
@@ -387,12 +426,24 @@ pub fn quote_exact_input(
                 reason: format!("liquidity overflow after crossing tick {}", next_tick),
             })?;
             crossed_ticks.push(next_tick);
+            if zero_for_one {
+                if tick_cursor > 0 {
+                    tick_cursor -= 1;
+                }
+                current_tick = next_tick.saturating_sub(1);
+            } else {
+                if tick_cursor < pool.initialized_ticks.len() {
+                    tick_cursor += 1;
+                }
+                current_tick = next_tick;
+            }
             if current_liquidity == 0 && !remaining.is_zero() {
                 return Err(DexError::InvalidPool {
                     reason: "liquidity became zero before amount was exhausted".to_string(),
                 });
             }
         } else {
+            current_tick = tick_math::get_tick_at_sqrt_ratio(current_sqrt).map_err(DexError::MathError)?;
             break;
         }
     }

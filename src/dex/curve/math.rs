@@ -714,6 +714,32 @@ pub fn calculate_swap_output(
 ) -> Result<U256, MathError> {
     let rates = stableswap_rates_resolve(decimals, stored_rates)?;
     let xp = stableswap_xp_from_rates(balances, &rates)?;
+    calculate_swap_output_from_xp(
+        amount_in,
+        token_in_index,
+        token_out_index,
+        &xp,
+        &rates,
+        variant,
+        a,
+        fee_raw,
+        fee_bps,
+    )
+}
+
+/// Fast-path variant that reuses precomputed `xp` and `rates`.
+#[inline]
+pub fn calculate_swap_output_from_xp(
+    amount_in: U256,
+    token_in_index: usize,
+    token_out_index: usize,
+    xp: &[U256],
+    rates: &[U256],
+    variant: StableswapMathVariant,
+    a: U256,
+    fee_raw: U256,
+    fee_bps: u32,
+) -> Result<U256, MathError> {
     calculate_dy(
         token_in_index,
         token_out_index,
@@ -1418,12 +1444,59 @@ pub fn calculate_curve_post_victim_balances(
 
     let rates = stableswap_rates_resolve(decimals, stored_rates)?;
     let xp = stableswap_xp_from_rates(balances, &rates)?;
+    calculate_curve_post_victim_balances_from_xp(
+        victim_amount,
+        victim_token_in,
+        victim_token_out,
+        balances,
+        &xp,
+        &rates,
+        variant,
+        amplification,
+        fee_raw,
+        fee_bps,
+    )
+}
+
+/// Fast-path variant that reuses precomputed `xp` and `rates`.
+#[inline]
+pub fn calculate_curve_post_victim_balances_from_xp(
+    victim_amount: U256,
+    victim_token_in: usize,
+    victim_token_out: usize,
+    balances: &[U256],
+    xp: &[U256],
+    rates: &[U256],
+    variant: StableswapMathVariant,
+    amplification: U256,
+    fee_raw: U256,
+    fee_bps: u32,
+) -> Result<Vec<U256>, MathError> {
+    if victim_token_in >= balances.len() || victim_token_out >= balances.len() {
+        return Err(MathError::InvalidInput {
+            operation: "calculate_curve_post_victim_balances_from_xp".to_string(),
+            reason: "token index out of bounds".to_string(),
+            context: format!(
+                "in={}, out={}, balances_len={}",
+                victim_token_in,
+                victim_token_out,
+                balances.len()
+            ),
+        });
+    }
+    if victim_token_in == victim_token_out {
+        return Err(MathError::InvalidInput {
+            operation: "calculate_curve_post_victim_balances_from_xp".to_string(),
+            reason: "token indices must differ".to_string(),
+            context: format!("token={}", victim_token_in),
+        });
+    }
     let victim_output = calculate_dy(
         victim_token_in,
         victim_token_out,
         victim_amount,
-        &xp,
-        &rates,
+        xp,
+        rates,
         variant,
         amplification,
         fee_raw,

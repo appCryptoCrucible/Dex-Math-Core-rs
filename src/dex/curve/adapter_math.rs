@@ -155,8 +155,13 @@ pub fn quote_exact_input(
         }));
     }
 
-    let rates = math::stableswap_rates_resolve(&pool.decimals, pool.stored_rates.as_deref())
-        .map_err(DexError::MathError)?;
+    let owned_rates;
+    let rates: &[U256] = if let Some(stored) = pool.stored_rates.as_deref() {
+        stored
+    } else {
+        owned_rates = math::stableswap_rates_resolve(&pool.decimals, None).map_err(DexError::MathError)?;
+        &owned_rates
+    };
     let xp_before = math::stableswap_xp_from_rates(&pool.balances, &rates).map_err(DexError::MathError)?;
 
     let spot_before = math::calculate_curve_price(
@@ -169,13 +174,12 @@ pub fn quote_exact_input(
     )
     .map_err(DexError::MathError)?;
 
-    let amount_out = math::calculate_swap_output(
+    let amount_out = math::calculate_swap_output_from_xp(
         amount_in,
         token_in_index,
         token_out_index,
-        &pool.balances,
-        &pool.decimals,
-        pool.stored_rates.as_deref(),
+        &xp_before,
+        &rates,
         pool.variant,
         pool.amplification,
         pool.fee_raw,
@@ -188,19 +192,21 @@ pub fn quote_exact_input(
         });
     }
 
-    let balances_after = math::calculate_curve_post_victim_balances(
-        amount_in,
-        token_in_index,
-        token_out_index,
-        &pool.balances,
-        &pool.decimals,
-        pool.stored_rates.as_deref(),
-        pool.variant,
-        pool.amplification,
-        pool.fee_raw,
-        pool.fee_bps,
-    )
-    .map_err(DexError::MathError)?;
+    let mut balances_after = pool.balances.clone();
+    balances_after[token_in_index] = balances_after[token_in_index]
+        .checked_add(amount_in)
+        .ok_or_else(|| DexError::MathError(MathError::Overflow {
+            operation: "curve.quote_exact_input.balances_after".to_string(),
+            inputs: vec![],
+            context: format!("balance[{}] + amount_in", token_in_index),
+        }))?;
+    balances_after[token_out_index] = balances_after[token_out_index]
+        .checked_sub(amount_out)
+        .ok_or_else(|| DexError::MathError(MathError::Underflow {
+            operation: "curve.quote_exact_input.balances_after".to_string(),
+            inputs: vec![],
+            context: format!("balance[{}] - amount_out", token_out_index),
+        }))?;
 
     let xp_after = math::stableswap_xp_from_rates(&balances_after, &rates).map_err(DexError::MathError)?;
     let spot_after = math::calculate_curve_price(

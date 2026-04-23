@@ -235,9 +235,14 @@ impl TryFrom<&crate::data::pool_state::V4PoolState> for V4PoolSnapshot {
     type Error = DexError;
 
     fn try_from(v: &crate::data::pool_state::V4PoolState) -> Result<Self, Self::Error> {
-        let mut initialized_ticks = v.initialized_ticks.clone();
-        initialized_ticks.sort_unstable();
-        initialized_ticks.dedup();
+        let initialized_ticks = if v.initialized_ticks.windows(2).all(|w| w[0] < w[1]) {
+            v.initialized_ticks.clone()
+        } else {
+            let mut ticks = v.initialized_ticks.clone();
+            ticks.sort_unstable();
+            ticks.dedup();
+            ticks
+        };
 
         let parsed_hook_class = v
             .hook_class
@@ -542,6 +547,30 @@ fn find_next_initialized_tick(
     }
 }
 
+#[inline(always)]
+fn init_tick_cursor(current_tick: i32, initialized_ticks: &[i32], zero_for_one: bool) -> usize {
+    if zero_for_one {
+        initialized_ticks.partition_point(|&t| t < current_tick)
+    } else {
+        initialized_ticks.partition_point(|&t| t <= current_tick)
+    }
+}
+
+#[inline(always)]
+fn next_tick_from_cursor(initialized_ticks: &[i32], cursor: usize, zero_for_one: bool) -> i32 {
+    if zero_for_one {
+        if cursor > 0 {
+            initialized_ticks[cursor - 1]
+        } else {
+            uniswap_v3::math::MIN_TICK
+        }
+    } else if cursor < initialized_ticks.len() {
+        initialized_ticks[cursor]
+    } else {
+        uniswap_v3::math::MAX_TICK
+    }
+}
+
 /// Deterministic exact-input quote for Uniswap v4 concentrated liquidity (strict mode).
 ///
 /// Canonical backend:
@@ -600,18 +629,17 @@ pub fn quote_exact_input_with_hook_adapter_and_state(
         }));
     }
 
-    let (hook_input_delta, hook_output_delta, used_hook_state) = if let Some(state) = hook_state {
-        let (_fee, input_delta, output_delta, used) = hook_effects_from_state(pool, state)?;
-        (input_delta, output_delta, used)
+    let (state_fee, hook_input_delta, hook_output_delta, used_hook_state) = if let Some(state) = hook_state {
+        let (fee, input_delta, output_delta, used) = hook_effects_from_state(pool, state)?;
+        (Some(fee), input_delta, output_delta, used)
     } else {
-        (0, 0, false)
+        (None, 0, 0, false)
     };
     let amount_in_effective =
         apply_signed_delta_to_u256(amount_in, hook_input_delta, "hook before_swap input delta")?;
 
-    let (fee_bps_applied, used_override) = if let Some(state) = hook_state {
-        let (state_fee, _, _, _) = hook_effects_from_state(pool, state)?;
-        (state_fee, used_hook_state)
+    let (fee_bps_applied, used_override) = if let Some(fee) = state_fee {
+        (fee, used_hook_state)
     } else {
         effective_fee_with_adapter(pool, amount_in_effective, direction, hook_adapter)?
     };
@@ -647,19 +675,15 @@ pub fn quote_exact_input_with_hook_adapter_and_state(
     let mut current_sqrt = pool.sqrt_price_x96;
     let mut current_tick = pool.tick;
     let mut current_liquidity = pool.liquidity;
-    let mut crossed_ticks = Vec::new();
+    let mut crossed_ticks = Vec::with_capacity(pool.initialized_ticks.len().min(128));
+    let mut tick_cursor = init_tick_cursor(current_tick, &pool.initialized_ticks, zero_for_one);
+    let fee_bps_u32 = fee_bps_applied.as_u32();
 
     for _ in 0..1024usize {
         if remaining.is_zero() {
             break;
         }
-        let next_tick = find_next_initialized_tick(
-            current_tick,
-            &pool.initialized_ticks,
-            pool.tick_spacing,
-            zero_for_one,
-        )
-        .map_err(DexError::MathError)?;
+        let next_tick = next_tick_from_cursor(&pool.initialized_ticks, tick_cursor, zero_for_one);
         let target = tick_math::get_sqrt_ratio_at_tick(next_tick).map_err(|e| {
             DexError::MathError(MathError::InvalidInput {
                 operation: "v4.quote_exact_input.get_sqrt_ratio_at_tick".to_string(),
@@ -667,12 +691,14 @@ pub fn quote_exact_input_with_hook_adapter_and_state(
                 context: format!("next_tick={}", next_tick),
             })
         })?;
-        let specified_i128 = i128::try_from(remaining).unwrap_or(i128::MAX);
+        let specified_i128 = i128::try_from(remaining).map_err(|_| DexError::InvalidPool {
+            reason: "remaining amount exceeds i128 range required by swap step".to_string(),
+        })?;
         let step = swap_math::compute_swap_step(
             current_liquidity,
             current_sqrt,
             target,
-            fee_bps_applied.as_u32(),
+            fee_bps_u32,
             specified_i128,
             true,
             zero_for_one,
@@ -690,6 +716,11 @@ pub fn quote_exact_input_with_hook_adapter_and_state(
         }
 
         let used = U256::from(step.used_amount as u128);
+        if used.is_zero() && !remaining.is_zero() {
+            return Err(DexError::InvalidPool {
+                reason: "swap step made no progress while remaining input is non-zero".to_string(),
+            });
+        }
         let out = exact_input_amount_out_from_returned(step.returned_amount, "tick-crossing loop")?;
 
         amount_out_total = amount_out_total
@@ -707,7 +738,6 @@ pub fn quote_exact_input_with_hook_adapter_and_state(
                 context: "remaining - used".to_string(),
             }))?;
         current_sqrt = step.next_sqrt_p;
-        current_tick = uniswap_v3::math::sqrt_price_to_tick(current_sqrt).map_err(DexError::MathError)?;
 
         if step.next_sqrt_p == target && !remaining.is_zero() {
             let liq_net = pool.tick_liquidity_net.get(&next_tick).ok_or_else(|| DexError::InvalidPool {
@@ -729,12 +759,24 @@ pub fn quote_exact_input_with_hook_adapter_and_state(
                 reason: format!("liquidity overflow after crossing tick {}", next_tick),
             })?;
             crossed_ticks.push(next_tick);
+            if zero_for_one {
+                if tick_cursor > 0 {
+                    tick_cursor -= 1;
+                }
+                current_tick = next_tick.saturating_sub(1);
+            } else {
+                if tick_cursor < pool.initialized_ticks.len() {
+                    tick_cursor += 1;
+                }
+                current_tick = next_tick;
+            }
             if current_liquidity == 0 && !remaining.is_zero() {
                 return Err(DexError::InvalidPool {
                     reason: "liquidity became zero before amount was exhausted".to_string(),
                 });
             }
         } else {
+            current_tick = uniswap_v3::math::sqrt_price_to_tick(current_sqrt).map_err(DexError::MathError)?;
             break;
         }
     }
