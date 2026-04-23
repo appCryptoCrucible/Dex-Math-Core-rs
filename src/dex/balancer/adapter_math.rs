@@ -25,26 +25,27 @@ pub struct BalancerPoolSnapshot {
     pub swap_fee_bps: BasisPoints,
 }
 
-impl From<&crate::data::pool_state::BalancerPoolState> for BalancerPoolSnapshot {
-    fn from(v: &crate::data::pool_state::BalancerPoolState) -> Self {
-        // Weighted adapter module currently supports 2-token projections.
-        let (b0, b1) = if v.balances.len() >= 2 {
-            (ethers_to_alloy(v.balances[0]), ethers_to_alloy(v.balances[1]))
-        } else {
-            (U256::ZERO, U256::ZERO)
-        };
-        let (w0, w1) = if v.weights.len() >= 2 {
-            (ethers_to_alloy(v.weights[0]), ethers_to_alloy(v.weights[1]))
-        } else {
-            (U256::ZERO, U256::ZERO)
-        };
-        Self {
-            balance0: b0,
-            balance1: b1,
-            weight0: w0,
-            weight1: w1,
-            swap_fee_bps: BasisPoints::new_const(v.swap_fee_bps),
+impl TryFrom<&crate::data::pool_state::BalancerPoolState> for BalancerPoolSnapshot {
+    type Error = DexError;
+
+    fn try_from(v: &crate::data::pool_state::BalancerPoolState) -> Result<Self, Self::Error> {
+        if v.balances.len() < 2 {
+            return Err(DexError::InvalidPool {
+                reason: format!("balancer snapshot requires >=2 balances, got {}", v.balances.len()),
+            });
         }
+        if v.weights.len() < 2 {
+            return Err(DexError::InvalidPool {
+                reason: format!("balancer snapshot requires >=2 weights, got {}", v.weights.len()),
+            });
+        }
+        Ok(Self {
+            balance0: ethers_to_alloy(v.balances[0]),
+            balance1: ethers_to_alloy(v.balances[1]),
+            weight0: ethers_to_alloy(v.weights[0]),
+            weight1: ethers_to_alloy(v.weights[1]),
+            swap_fee_bps: BasisPoints::new_const(v.swap_fee_bps),
+        })
     }
 }
 
@@ -255,6 +256,7 @@ pub fn quote_exact_input(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ethers_core::types::Address;
 
     fn w(v: u64) -> U256 {
         // convert percent-like integer to 1e18-scale decimal (e.g., 50 -> 0.5e18)
@@ -320,6 +322,23 @@ mod tests {
         match err {
             DexError::MathError(MathError::InvalidInput { .. }) => {}
             _ => panic!("expected MathError::InvalidInput"),
+        }
+    }
+
+    #[test]
+    fn snapshot_try_from_rejects_short_balances() {
+        let state = crate::data::pool_state::BalancerPoolState::new(
+            Address::zero(),
+            Address::zero(),
+            [0u8; 32],
+            vec![Address::zero()],
+            vec![ethers_core::types::U256::from(1u64)],
+            30,
+        );
+        let err = BalancerPoolSnapshot::try_from(&state).unwrap_err();
+        match err {
+            DexError::InvalidPool { reason } => assert!(reason.contains("requires >=2 balances")),
+            _ => panic!("expected InvalidPool"),
         }
     }
 }

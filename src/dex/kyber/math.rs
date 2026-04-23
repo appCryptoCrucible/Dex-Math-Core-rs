@@ -503,7 +503,7 @@ mod parity_tests {
         )
         .unwrap();
 
-        let out = (-step.returned_amount) as u128;
+        let out = step.returned_amount.unsigned_abs();
         assert!(out <= requested_out);
         assert!(step.used_amount >= 0);
     }

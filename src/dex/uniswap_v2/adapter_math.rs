@@ -6,6 +6,7 @@ use alloy_primitives::U256;
 use uniswap_v3_math::full_math;
 
 use crate::core::{BasisPoints, DexError, MathError};
+use crate::core::types::DexType;
 use crate::dex::adapter::SwapDirection;
 use crate::dex::common::ethers_to_alloy;
 use crate::dex::uniswap_v2::math;
@@ -21,14 +22,29 @@ pub struct V2PoolSnapshot {
     pub fee_bps: BasisPoints,
 }
 
-impl From<&crate::data::pool_state::V2PoolState> for V2PoolSnapshot {
-    fn from(v: &crate::data::pool_state::V2PoolState) -> Self {
-        Self {
+#[inline(always)]
+fn v2_fee_bps_for_dex(dex_type: DexType) -> Result<BasisPoints, DexError> {
+    let fee = match dex_type {
+        DexType::UniswapV2 | DexType::SushiSwap | DexType::ShibaSwap => 30,
+        DexType::PancakeSwap => 25,
+        _ => {
+            return Err(DexError::InvalidPool {
+                reason: format!("unsupported dex_type for V2 snapshot: {:?}", dex_type),
+            });
+        }
+    };
+    Ok(BasisPoints::new_const(fee))
+}
+
+impl TryFrom<&crate::data::pool_state::V2PoolState> for V2PoolSnapshot {
+    type Error = DexError;
+
+    fn try_from(v: &crate::data::pool_state::V2PoolState) -> Result<Self, Self::Error> {
+        Ok(Self {
             reserve0: ethers_to_alloy(v.reserve0),
             reserve1: ethers_to_alloy(v.reserve1),
-            // V2 standard fee for this crate.
-            fee_bps: BasisPoints::new_const(30),
-        }
+            fee_bps: v2_fee_bps_for_dex(v.dex_type)?,
+        })
     }
 }
 
@@ -235,6 +251,7 @@ pub fn quote_exact_input(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ethers_core::types::Address;
 
     #[test]
     fn quote_exact_input_token0_to_token1_updates_reserves() {
@@ -289,6 +306,25 @@ mod tests {
         match err {
             DexError::MathError(MathError::InvalidInput { .. }) => {}
             _ => panic!("expected MathError::InvalidInput"),
+        }
+    }
+
+    #[test]
+    fn snapshot_try_from_uses_pancake_fee() {
+        let s = crate::data::pool_state::V2PoolState::new(Address::zero(), Address::zero(), Address::zero())
+            .with_dex_type(DexType::PancakeSwap);
+        let snap = V2PoolSnapshot::try_from(&s).unwrap();
+        assert_eq!(snap.fee_bps.as_u32(), 25);
+    }
+
+    #[test]
+    fn snapshot_try_from_rejects_non_v2_dex_type() {
+        let s = crate::data::pool_state::V2PoolState::new(Address::zero(), Address::zero(), Address::zero())
+            .with_dex_type(DexType::UniswapV3);
+        let err = V2PoolSnapshot::try_from(&s).unwrap_err();
+        match err {
+            DexError::InvalidPool { reason } => assert!(reason.contains("unsupported dex_type")),
+            _ => panic!("expected InvalidPool"),
         }
     }
 }

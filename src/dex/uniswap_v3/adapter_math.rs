@@ -61,13 +61,15 @@ impl V3PoolSnapshot {
 
 impl From<&crate::data::pool_state::V3PoolState> for V3PoolSnapshot {
     fn from(v: &crate::data::pool_state::V3PoolState) -> Self {
+        let mut initialized_ticks = v.initialized_ticks.clone();
+        initialized_ticks.sort_unstable();
         Self {
             sqrt_price_x96: ethers_to_alloy(v.sqrt_price_x96),
             tick: v.tick,
             liquidity: v.liquidity,
             fee_bps: BasisPoints::new_const(v.fee_tier),
             tick_spacing: v.tick_spacing,
-            initialized_ticks: v.initialized_ticks.clone(),
+            initialized_ticks,
             tick_liquidity_net: v.tick_liquidity_map.clone(),
         }
     }

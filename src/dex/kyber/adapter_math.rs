@@ -135,6 +135,16 @@ fn execution_price_wad(amount_in: U256, amount_out: U256, direction: SwapDirecti
 }
 
 #[inline(always)]
+fn exact_input_amount_out_from_returned(returned_amount: i128, context: &str) -> Result<U256, DexError> {
+    let neg = returned_amount.checked_neg().ok_or_else(|| DexError::MathError(MathError::Overflow {
+        operation: "kyber.quote_exact_input.returned_amount".to_string(),
+        inputs: vec![],
+        context: format!("checked_neg overflow ({})", context),
+    }))?;
+    Ok(U256::from(neg as u128))
+}
+
+#[inline(always)]
 fn apply_fee(amount_in: U256, fee_bps: BasisPoints) -> Result<U256, MathError> {
     let multiplier = U256::from(10_000u32 - fee_bps.as_u32());
     amount_in
@@ -278,7 +288,7 @@ pub fn quote_exact_input(
                 reason: "swap step produced non-negative returned_amount for exact-input".to_string(),
             });
         }
-        let amount_out = U256::from((-step.returned_amount) as u128);
+        let amount_out = exact_input_amount_out_from_returned(step.returned_amount, "single-range fallback")?;
         let tick_after = tick_math::get_tick_at_sqrt_ratio(step.next_sqrt_p).map_err(DexError::MathError)?;
         let execution = execution_price_wad(amount_in, amount_out, direction).map_err(DexError::MathError)?;
         let impact = uniswap_v3::math::calculate_v3_price_impact(pool.sqrt_price_x96, step.next_sqrt_p)
@@ -343,7 +353,7 @@ pub fn quote_exact_input(
             });
         }
         let used = U256::from(step.used_amount as u128);
-        let out = U256::from((-step.returned_amount) as u128);
+        let out = exact_input_amount_out_from_returned(step.returned_amount, "tick-crossing loop")?;
 
         amount_out_total = amount_out_total
             .checked_add(out)

@@ -8,6 +8,7 @@
 
 
 use alloy_primitives::U256;
+use primitive_types::{U256 as PrimU256, U512};
 use crate::core::{BasisPoints, MathError};
 use crate::dex::adapter::SwapDirection;
 use crate::dex::common::alloy_to_ethers;
@@ -41,9 +42,9 @@ pub const MIN_SQRT_RATIO: u128 = 4295128739;
 const U256_ZERO: U256 = U256::ZERO;
 const BPS_DENOM: U256 = U256::from_limbs([10_000, 0, 0, 0]);
 /// 1 << 96 (Q64.96 fixed-point scale)
+#[cfg(test)]
 const Q96: U256 = U256::from_limbs([0, 0x1_0000_0000, 0, 0]);
 const Q192: U256 = U256::from_limbs([0, 0, 0, 1]);
-const WAD: U256 = U256::from_limbs([1_000_000_000_000_000_000, 0, 0, 0]);
 
 fn map_v3_error(e: UniswapV3MathError) -> MathError {
     MathError::InvalidInput {
@@ -186,10 +187,33 @@ pub fn reserves_to_sqrt_price_x96(reserve_in: U256, reserve_out: U256) -> Result
 /// Formula: price_wad = sqrt_price_x96^2 * 1e18 / 2^192
 #[inline(always)]
 pub fn sqrt_price_to_price_wad(sqrt_price_x96: U256) -> Result<U256, MathError> {
-    // Preserve Q96 fractional precision before final WAD scaling:
-    // price_wad = (sqrt^2 / Q96) * WAD / Q96
-    let price_q96 = mul_div(sqrt_price_x96, sqrt_price_x96, Q96)?;
-    mul_div(price_q96, WAD, Q96)
+    // Compute floor(sqrt^2 * WAD / Q192) with a single final division to avoid
+    // extra truncation from staged floor operations.
+    let s = PrimU256(sqrt_price_x96.into_limbs());
+    let s512 = U512::from(s);
+    let numerator = s512
+        .checked_mul(s512)
+        .and_then(|v| v.checked_mul(U512::from(1_000_000_000_000_000_000u128)))
+        .ok_or_else(|| MathError::Overflow {
+            operation: "sqrt_price_to_price_wad".to_string(),
+            inputs: vec![],
+            context: "sqrt^2 * WAD".to_string(),
+        })?;
+    let denominator = U512::from(PrimU256(Q192.into_limbs()));
+    let q = numerator / denominator;
+    if q > U512::from(PrimU256::MAX) {
+        return Err(MathError::Overflow {
+            operation: "sqrt_price_to_price_wad".to_string(),
+            inputs: vec![],
+            context: "result exceeds U256".to_string(),
+        });
+    }
+    let out = PrimU256::try_from(q).map_err(|_| MathError::Overflow {
+        operation: "sqrt_price_to_price_wad".to_string(),
+        inputs: vec![],
+        context: "U512 -> U256 conversion failed".to_string(),
+    })?;
+    Ok(U256::from_limbs(out.0))
 }
 
 /// Calculate V3 swap output using correct Uniswap V3 SwapMath formulas
