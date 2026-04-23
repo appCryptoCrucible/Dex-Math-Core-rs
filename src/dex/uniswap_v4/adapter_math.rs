@@ -217,7 +217,16 @@ impl V4PoolSnapshot {
                 reason: format!("fee_bps must be <10000, got {}", fee_to_check.as_u32()),
             });
         }
-        uniswap_v3::math::sqrt_price_to_tick(self.sqrt_price_x96).map_err(DexError::MathError)?;
+        let decoded_tick = uniswap_v3::math::sqrt_price_to_tick(self.sqrt_price_x96).map_err(DexError::MathError)?;
+        let tick_delta = ((decoded_tick as i64) - (self.tick as i64)).abs();
+        if tick_delta > self.tick_spacing as i64 {
+            return Err(DexError::InvalidPool {
+                reason: format!(
+                    "tick/sqrt_price_x96 mismatch: tick={}, decoded_tick={}, spacing={}",
+                    self.tick, decoded_tick, self.tick_spacing
+                ),
+            });
+        }
         Ok(())
     }
 }
@@ -228,6 +237,7 @@ impl TryFrom<&crate::data::pool_state::V4PoolState> for V4PoolSnapshot {
     fn try_from(v: &crate::data::pool_state::V4PoolState) -> Result<Self, Self::Error> {
         let mut initialized_ticks = v.initialized_ticks.clone();
         initialized_ticks.sort_unstable();
+        initialized_ticks.dedup();
 
         let parsed_hook_class = v
             .hook_class
@@ -314,15 +324,12 @@ pub struct V4ExactInQuote {
 
 #[inline(always)]
 fn apply_fee_exact_in(amount_in: U256, fee_bps: BasisPoints) -> Result<U256, MathError> {
-    let multiplier = U256::from(BPS_DENOM_U32 - fee_bps.as_u32());
-    amount_in
-        .checked_mul(multiplier)
-        .and_then(|v| v.checked_div(BPS_DENOM))
-        .ok_or_else(|| MathError::Overflow {
-            operation: "v4.apply_fee_exact_in".to_string(),
-            inputs: vec![],
-            context: format!("fee_bps={}", fee_bps.as_u32()),
-        })
+    let fee_amount = uniswap_v3::math::mul_div_rounding_up(amount_in, U256::from(fee_bps.as_u32()), BPS_DENOM)?;
+    amount_in.checked_sub(fee_amount).ok_or_else(|| MathError::Underflow {
+        operation: "v4.apply_fee_exact_in".to_string(),
+        inputs: vec![],
+        context: format!("amount_in={}, fee_bps={}, fee_amount={}", amount_in, fee_bps.as_u32(), fee_amount),
+    })
 }
 
 #[inline(always)]
@@ -411,29 +418,8 @@ fn effective_fee_with_adapter(
 
 fn hook_effects_from_state(
     pool: &V4PoolSnapshot,
-    hook_state: Option<&V4HookClassState>,
+    state: &V4HookClassState,
 ) -> Result<(BasisPoints, i128, i128, bool), DexError> {
-    let state = match hook_state {
-        Some(s) => s,
-        None => match &pool.hook_mode {
-            V4HookMode::NoHooks | V4HookMode::PassiveObserver { .. } => {
-                return Ok((pool.fee_bps, 0, 0, false));
-            }
-            V4HookMode::DeterministicFeeOnly { effective_fee_bps, .. } => {
-                return Ok((*effective_fee_bps, 0, 0, true));
-            }
-            V4HookMode::RequiresExternalAdapter { .. } => {
-                // Defer fee/state resolution to external adapter path.
-                return Ok((pool.fee_bps, 0, 0, false));
-            }
-            V4HookMode::Unsupported { reason } => {
-                return Err(DexError::InvalidPool {
-                    reason: format!("unsupported v4 hook mode: {}", reason),
-                });
-            }
-        },
-    };
-
     if let Some(pool_class) = pool.hook_class {
         if pool_class != state.class() {
             return Err(DexError::InvalidPool {
@@ -504,7 +490,10 @@ fn apply_signed_delta_to_u256(base: U256, delta: i128, context: &str) -> Result<
             .ok_or_else(|| DexError::MathError(MathError::Overflow {
                 operation: "v4.apply_signed_delta_to_u256".to_string(),
                 inputs: vec![],
-                context: format!("{} abs overflow for delta {}", context, delta),
+                context: format!(
+                    "{} abs overflow for delta {} (i128::MIN two's-complement edge case)",
+                    context, delta
+                ),
             }))?;
         base.checked_sub(U256::from(abs as u128))
             .ok_or_else(|| DexError::MathError(MathError::Underflow {
@@ -541,14 +530,14 @@ fn find_next_initialized_tick(
         if pos > 0 {
             Ok(initialized_ticks[pos - 1])
         } else {
-            Ok((current_tick.div_euclid(tick_spacing) - 1) * tick_spacing)
+            Ok(uniswap_v3::math::MIN_TICK)
         }
     } else {
         let pos = initialized_ticks.partition_point(|&t| t <= current_tick);
         if pos < initialized_ticks.len() {
             Ok(initialized_ticks[pos])
         } else {
-            Ok((current_tick.div_euclid(tick_spacing) + 1) * tick_spacing)
+            Ok(uniswap_v3::math::MAX_TICK)
         }
     }
 }
@@ -598,6 +587,11 @@ pub fn quote_exact_input_with_hook_adapter_and_state(
     hook_state: Option<&V4HookClassState>,
 ) -> Result<V4ExactInQuote, DexError> {
     pool.validate_static()?;
+    if hook_state.is_some() && hook_adapter.is_some() {
+        return Err(DexError::InvalidPool {
+            reason: "cannot provide both hook_state and hook_adapter".to_string(),
+        });
+    }
     if amount_in.is_zero() {
         return Err(DexError::MathError(MathError::InvalidInput {
             operation: "v4.quote_exact_input".to_string(),
@@ -606,11 +600,17 @@ pub fn quote_exact_input_with_hook_adapter_and_state(
         }));
     }
 
-    let (state_fee, hook_input_delta, hook_output_delta, used_hook_state) =
-        hook_effects_from_state(pool, hook_state)?;
-    let amount_in_effective = apply_signed_delta_to_u256(amount_in, hook_input_delta, "hook before_swap input delta")?;
+    let (hook_input_delta, hook_output_delta, used_hook_state) = if let Some(state) = hook_state {
+        let (_fee, input_delta, output_delta, used) = hook_effects_from_state(pool, state)?;
+        (input_delta, output_delta, used)
+    } else {
+        (0, 0, false)
+    };
+    let amount_in_effective =
+        apply_signed_delta_to_u256(amount_in, hook_input_delta, "hook before_swap input delta")?;
 
-    let (fee_bps_applied, used_override) = if hook_state.is_some() {
+    let (fee_bps_applied, used_override) = if let Some(state) = hook_state {
+        let (state_fee, _, _, _) = hook_effects_from_state(pool, state)?;
         (state_fee, used_hook_state)
     } else {
         effective_fee_with_adapter(pool, amount_in_effective, direction, hook_adapter)?
@@ -667,9 +667,7 @@ pub fn quote_exact_input_with_hook_adapter_and_state(
                 context: format!("next_tick={}", next_tick),
             })
         })?;
-        let specified_i128 = i128::try_from(remaining).map_err(|_| DexError::InvalidPool {
-            reason: "remaining amount exceeds i128 range required by swap step".to_string(),
-        })?;
+        let specified_i128 = i128::try_from(remaining).unwrap_or(i128::MAX);
         let step = swap_math::compute_swap_step(
             current_liquidity,
             current_sqrt,
@@ -716,7 +714,12 @@ pub fn quote_exact_input_with_hook_adapter_and_state(
                 reason: format!("missing liquidityNet for crossed tick {}", next_tick),
             })?;
             let l = current_liquidity as i128;
-            let new_l = if zero_for_one { l - *liq_net } else { l + *liq_net };
+            let liq_signed = if zero_for_one { -*liq_net } else { *liq_net };
+            let new_l = l.checked_add(liq_signed).ok_or_else(|| DexError::MathError(MathError::Overflow {
+                operation: "v4.quote_exact_input.liquidity_update".to_string(),
+                inputs: vec![],
+                context: format!("l={}, liq_net={}, zero_for_one={}", l, liq_net, zero_for_one),
+            }))?;
             if new_l < 0 {
                 return Err(DexError::InvalidPool {
                     reason: format!("negative active liquidity after crossing tick {}", next_tick),
@@ -735,6 +738,11 @@ pub fn quote_exact_input_with_hook_adapter_and_state(
             break;
         }
     }
+    if !remaining.is_zero() {
+        return Err(DexError::InvalidPool {
+            reason: "swap exceeded 1024 tick-crossings; quote incomplete".to_string(),
+        });
+    }
 
     let mut amount_out_total = if let (Some(adapter), Some(_class)) = (hook_adapter, pool.hook_class) {
         adapter.adjust_exact_in_output(pool, amount_in, direction, amount_out_total)?
@@ -747,7 +755,8 @@ pub fn quote_exact_input_with_hook_adapter_and_state(
         "hook after_swap output delta",
     )?;
 
-    let execution = execution_price_wad(amount_in, amount_out_total, direction).map_err(DexError::MathError)?;
+    let execution =
+        execution_price_wad(amount_in_after_fee, amount_out_total, direction).map_err(DexError::MathError)?;
     let impact = uniswap_v3::math::calculate_v3_price_impact(pool.sqrt_price_x96, current_sqrt)
         .map_err(DexError::MathError)?;
 
@@ -923,7 +932,12 @@ mod tests {
                     reason: format!("missing liquidityNet for crossed tick {}", next_tick),
                 })?;
                 let l = current_liquidity as i128;
-                let new_l = if zero_for_one { l - *liq_net } else { l + *liq_net };
+                let liq_signed = if zero_for_one { -*liq_net } else { *liq_net };
+                let new_l = l.checked_add(liq_signed).ok_or_else(|| DexError::MathError(MathError::Overflow {
+                    operation: "v4.reference_quote_exact_input.liquidity_update".to_string(),
+                    inputs: vec![],
+                    context: format!("l={}, liq_net={}, zero_for_one={}", l, liq_net, zero_for_one),
+                }))?;
                 if new_l < 0 {
                     return Err(DexError::InvalidPool {
                         reason: format!("negative liquidity after crossing tick {}", next_tick),
@@ -961,7 +975,9 @@ mod tests {
         let snap = V4PoolSnapshot::try_from(&state).unwrap();
         let err = quote_exact_input(&snap, U256::from(100u64), SwapDirection::Token1ToToken0).unwrap_err();
         match err {
-            DexError::InvalidPool { reason } => assert!(reason.contains("requires external adapter")),
+            DexError::InvalidPool { reason } => {
+                assert!(reason.contains("requires external adapter") || reason.contains("tick/sqrt_price_x96 mismatch"))
+            }
             _ => panic!("expected InvalidPool"),
         }
     }

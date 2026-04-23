@@ -7,13 +7,19 @@ use ethers_core::types::U256 as EthersU256;
 use alloy_primitives::U256 as AlloyU256;
 
 /// Zero-cost ethers -> alloy U256 conversion via limb copy.
-/// Both types are [u64; 4] little-endian internally.
+///
+/// Invariant relied upon: both `ethers_core::types::U256` and
+/// `alloy_primitives::U256` are `[u64; 4]` little-endian for current crate
+/// versions pinned in this repository. If either upstream representation
+/// changes in a future major version, this conversion must be revisited.
 #[inline(always)]
 pub fn ethers_to_alloy(v: EthersU256) -> AlloyU256 {
     AlloyU256::from_limbs(v.0)
 }
 
 /// Zero-cost alloy -> ethers U256 conversion via limb copy.
+///
+/// See representation invariant note on `ethers_to_alloy`.
 #[inline(always)]
 pub fn alloy_to_ethers(v: AlloyU256) -> EthersU256 {
     EthersU256(v.into_limbs())

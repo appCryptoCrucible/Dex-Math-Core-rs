@@ -26,6 +26,7 @@ impl BasisPoints {
     }
 
     pub const fn new_const(bps: u32) -> Self {
+        debug_assert!(bps <= 10000, "BasisPoints::new_const out of range");
         Self(bps)
     }
 
