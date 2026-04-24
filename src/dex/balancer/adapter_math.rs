@@ -116,6 +116,51 @@ fn price_impact_bps(before_wad: U256, after_wad: U256) -> Result<u32, MathError>
     })
 }
 
+#[inline(always)]
+fn spot_price_wad(
+    balance_in: U256,
+    balance_out: U256,
+    weight_in: U256,
+    weight_out: U256,
+) -> Result<U256, MathError> {
+    if balance_in.is_zero() || balance_out.is_zero() {
+        return Err(MathError::InvalidInput {
+            operation: "balancer.spot_price_wad".to_string(),
+            reason: "pool balances cannot be zero".to_string(),
+            context: "".to_string(),
+        });
+    }
+    if weight_in.is_zero() || weight_out.is_zero() {
+        return Err(MathError::InvalidInput {
+            operation: "balancer.spot_price_wad".to_string(),
+            reason: "token weights cannot be zero".to_string(),
+            context: "".to_string(),
+        });
+    }
+    let numerator = balance_in
+        .checked_mul(weight_out)
+        .and_then(|v| v.checked_mul(WAD))
+        .ok_or_else(|| MathError::Overflow {
+            operation: "balancer.spot_price_wad".to_string(),
+            inputs: vec![],
+            context: "balance_in * weight_out * WAD".to_string(),
+        })?;
+    let denominator = balance_out
+        .checked_mul(weight_in)
+        .ok_or_else(|| MathError::Overflow {
+            operation: "balancer.spot_price_wad".to_string(),
+            inputs: vec![],
+            context: "balance_out * weight_in".to_string(),
+        })?;
+    if denominator.is_zero() {
+        return Err(MathError::DivisionByZero {
+            operation: "balancer.spot_price_wad".to_string(),
+            context: "balance_out * weight_in".to_string(),
+        });
+    }
+    Ok(numerator / denominator)
+}
+
 /// Deterministic exact-input quote for 2-token weighted pools.
 pub fn quote_exact_input(
     pool: &BalancerPoolSnapshot,
@@ -207,30 +252,21 @@ pub fn quote_exact_input(
         }
     };
 
-    let spot_before = math::calculate_balancer_price(
-        balance_in_before_prim,
-        balance_out_before_prim,
-        weight_in_prim,
-        weight_out_prim,
-    )
-    .map(to_alloy_u256)
-    .map_err(DexError::MathError)?;
-
-    let balance0_after_prim = to_primitive_u256(balance0_after);
-    let balance1_after_prim = to_primitive_u256(balance1_after);
-    let (balance_in_after_prim, balance_out_after_prim) = if zero_for_one {
-        (balance0_after_prim, balance1_after_prim)
+    let (balance_in_before, balance_out_before, weight_in, weight_out) = if zero_for_one {
+        (pool.balance0, pool.balance1, pool.weight0, pool.weight1)
     } else {
-        (balance1_after_prim, balance0_after_prim)
+        (pool.balance1, pool.balance0, pool.weight1, pool.weight0)
     };
-    let spot_after = math::calculate_balancer_price(
-        balance_in_after_prim,
-        balance_out_after_prim,
-        weight_in_prim,
-        weight_out_prim,
-    )
-    .map(to_alloy_u256)
-    .map_err(DexError::MathError)?;
+    let spot_before = spot_price_wad(balance_in_before, balance_out_before, weight_in, weight_out)
+        .map_err(DexError::MathError)?;
+
+    let (balance_in_after, balance_out_after) = if zero_for_one {
+        (balance0_after, balance1_after)
+    } else {
+        (balance1_after, balance0_after)
+    };
+    let spot_after =
+        spot_price_wad(balance_in_after, balance_out_after, weight_in, weight_out).map_err(DexError::MathError)?;
 
     let execution = execution_price_wad(amount_in, amount_out, direction).map_err(DexError::MathError)?;
     let impact_bps = price_impact_bps(spot_before, spot_after).map_err(DexError::MathError)?;

@@ -19,6 +19,8 @@ pub struct CurvePoolSnapshot {
     pub balances: Vec<U256>,
     pub decimals: Vec<u8>,
     pub stored_rates: Option<Vec<U256>>,
+    /// Optional precomputed rates to avoid per-quote resolution/allocation.
+    pub precomputed_rates: Option<Vec<U256>>,
     pub variant: StableswapMathVariant,
     pub amplification: U256,
     pub fee_raw: U256,
@@ -27,13 +29,20 @@ pub struct CurvePoolSnapshot {
 
 impl From<&crate::data::pool_state::CurvePoolState> for CurvePoolSnapshot {
     fn from(v: &crate::data::pool_state::CurvePoolState) -> Self {
+        let stored_rates: Option<Vec<U256>> = v
+            .stableswap_stored_rates
+            .as_ref()
+            .map(|r| r.iter().map(|x| crate::dex::common::ethers_to_alloy(*x)).collect());
+        let precomputed_rates = if let Some(r) = stored_rates.as_ref() {
+            Some(r.clone())
+        } else {
+            math::stableswap_rates_resolve(&v.decimals, None).ok()
+        };
         Self {
             balances: v.balances.iter().map(|x| crate::dex::common::ethers_to_alloy(*x)).collect(),
             decimals: v.decimals.clone(),
-            stored_rates: v
-                .stableswap_stored_rates
-                .as_ref()
-                .map(|r| r.iter().map(|x| crate::dex::common::ethers_to_alloy(*x)).collect()),
+            stored_rates,
+            precomputed_rates,
             variant: v.stableswap_math_variant,
             amplification: crate::dex::common::ethers_to_alloy(v.amplification),
             fee_raw: crate::dex::common::ethers_to_alloy(v.fee_raw),
@@ -156,25 +165,30 @@ pub fn quote_exact_input(
     }
 
     let owned_rates;
-    let rates: &[U256] = if let Some(stored) = pool.stored_rates.as_deref() {
+    let rates: &[U256] = if let Some(precomputed) = pool.precomputed_rates.as_deref() {
+        precomputed
+    } else if let Some(stored) = pool.stored_rates.as_deref() {
         stored
     } else {
         owned_rates = math::stableswap_rates_resolve(&pool.decimals, None).map_err(DexError::MathError)?;
         &owned_rates
     };
     let xp_before = math::stableswap_xp_from_rates(&pool.balances, &rates).map_err(DexError::MathError)?;
+    let d_before = math::calculate_d(&xp_before, pool.amplification, xp_before.len(), pool.variant)
+        .map_err(DexError::MathError)?;
 
-    let spot_before = math::calculate_curve_price(
+    let spot_before = math::calculate_curve_price_with_d(
         token_in_index,
         token_out_index,
         &xp_before,
         &rates,
         pool.variant,
         pool.amplification,
+        d_before,
     )
     .map_err(DexError::MathError)?;
 
-    let amount_out = math::calculate_swap_output_from_xp(
+    let amount_out = math::calculate_swap_output_from_xp_with_d(
         amount_in,
         token_in_index,
         token_out_index,
@@ -182,6 +196,7 @@ pub fn quote_exact_input(
         &rates,
         pool.variant,
         pool.amplification,
+        d_before,
         pool.fee_raw,
         pool.fee_bps,
     )
@@ -209,13 +224,16 @@ pub fn quote_exact_input(
         }))?;
 
     let xp_after = math::stableswap_xp_from_rates(&balances_after, &rates).map_err(DexError::MathError)?;
-    let spot_after = math::calculate_curve_price(
+    let d_after = math::calculate_d(&xp_after, pool.amplification, xp_after.len(), pool.variant)
+        .map_err(DexError::MathError)?;
+    let spot_after = math::calculate_curve_price_with_d(
         token_in_index,
         token_out_index,
         &xp_after,
         &rates,
         pool.variant,
         pool.amplification,
+        d_after,
     )
     .map_err(DexError::MathError)?;
 
@@ -246,6 +264,7 @@ mod tests {
             ],
             decimals: vec![18, 18],
             stored_rates: None,
+            precomputed_rates: None,
             variant: StableswapMathVariant::Vyper02ThreePool,
             amplification: U256::from(1000u64),
             fee_raw: U256::ZERO,

@@ -11,12 +11,17 @@ path = "src/lib.rs"
 [dependencies]
 alloy-primitives = "1"
 balancer-maths-rust = "0.3"
+hydra-amm = { version = "0.1.2", default-features = false, features = ["std", "all-pools"] }
+uniswap-v2-sdk = { version = "2.0.0", features = ["std"] }
+uniswap-v3-sdk = { version = "6.1.0", features = ["std"] }
+uniswap-v4-sdk = { version = "1.1.0", features = ["std"] }
 ethers-core = { version = "2", default-features = false }
 parking_lot = "0.12"
 primitive-types = "0.12"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "1"
+tokio = { version = "1", features = ["rt"] }
 tracing = "0.1"
 uniswap_v3_math = "0.6"
 curve-math = { version = "0.1.0-alpha.2", features = ["swap", "serde"] }

@@ -23,6 +23,8 @@ pub struct KyberPoolSnapshot {
     pub liquidity: u128,
     pub fee_bps: BasisPoints,
     pub tick_spacing: i32,
+    /// Optional pre-populated bitmap words (`word_pos -> bitmap`) for host-side fast-paths.
+    pub tick_bitmap_words: HashMap<i32, U256>,
     pub initialized_ticks: Vec<i32>,
     pub tick_liquidity_net: HashMap<i32, i128>,
 }
@@ -81,6 +83,11 @@ impl TryFrom<&crate::data::kyber_pool_state::KyberPoolState> for KyberPoolSnapsh
             liquidity: v.liquidity,
             fee_bps: BasisPoints::new_const(v.fee_tier),
             tick_spacing: v.tick_spacing,
+            tick_bitmap_words: v
+                .tick_bitmap
+                .iter()
+                .map(|(word, bits)| (*word, crate::dex::common::ethers_to_alloy(*bits)))
+                .collect(),
             initialized_ticks,
             tick_liquidity_net,
         })
@@ -480,6 +487,7 @@ mod tests {
             liquidity: 1_000_000_000u128,
             fee_bps: BasisPoints::new_const(25),
             tick_spacing: 60,
+            tick_bitmap_words: HashMap::new(),
             initialized_ticks: vec![-60, 0, 60, 120],
             tick_liquidity_net: HashMap::new(),
         }

@@ -123,14 +123,12 @@ impl V3PoolState {
         *self.tick_liquidity_map.entry(tick_lower).or_insert(0) += d;
         *self.tick_liquidity_map.entry(tick_upper).or_insert(0) -= d;
 
-        // Update initialized ticks list (keep sorted)
-        if !self.initialized_ticks.contains(&tick_lower) {
-            self.initialized_ticks.push(tick_lower);
-            self.initialized_ticks.sort();
+        // Update initialized ticks list (keep sorted) in O(log N) search.
+        if let Err(pos) = self.initialized_ticks.binary_search(&tick_lower) {
+            self.initialized_ticks.insert(pos, tick_lower);
         }
-        if !self.initialized_ticks.contains(&tick_upper) {
-            self.initialized_ticks.push(tick_upper);
-            self.initialized_ticks.sort();
+        if let Err(pos) = self.initialized_ticks.binary_search(&tick_upper) {
+            self.initialized_ticks.insert(pos, tick_upper);
         }
     }
 

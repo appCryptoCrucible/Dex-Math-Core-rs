@@ -127,6 +127,7 @@ fn fixture_kyber_cross() -> (KyberPoolSnapshot, U256, SwapDirection) {
             liquidity: 1_000_000_000u128,
             fee_bps: BasisPoints::new_const(25),
             tick_spacing: 60,
+            tick_bitmap_words: HashMap::new(),
             initialized_ticks: vec![-60, 0, 60, 120],
             tick_liquidity_net: liq,
         },

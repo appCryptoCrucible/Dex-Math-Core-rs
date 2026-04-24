@@ -598,6 +598,45 @@ pub fn calculate_dy(
     }
 
     let d = calculate_d(xp, a, n, variant)?;
+    calculate_dy_with_d(i, j, dx_raw, xp, rates, variant, a, d, fee_raw, fee_bps)
+}
+
+/// `calculate_dy` variant that reuses precomputed invariant `D`.
+#[inline]
+pub fn calculate_dy_with_d(
+    i: usize,
+    j: usize,
+    dx_raw: U256,
+    xp: &[U256],
+    rates: &[U256],
+    variant: StableswapMathVariant,
+    a: U256,
+    d: U256,
+    fee_raw: U256,
+    fee_bps: u32,
+) -> Result<U256, MathError> {
+    let n = xp.len();
+    if rates.len() != n {
+        return Err(MathError::InvalidInput {
+            operation: "calculate_dy_with_d".to_string(),
+            reason: format!("rates len {} != xp len {}", rates.len(), n),
+            context: "".to_string(),
+        });
+    }
+    if i >= n || j >= n {
+        return Err(MathError::InvalidInput {
+            operation: "calculate_dy_with_d".to_string(),
+            reason: "Token index out of bounds".to_string(),
+            context: format!("i={}, j={}, n={}", i, j, n),
+        });
+    }
+    if i == j {
+        return Err(MathError::InvalidInput {
+            operation: "calculate_dy_with_d".to_string(),
+            reason: "Cannot swap token with itself".to_string(),
+            context: format!("i={}, j={}", i, j),
+        });
+    }
 
     let rate_i = rates[i];
     let rate_j = rates[j];
@@ -605,13 +644,13 @@ pub fn calculate_dy(
     let dx_xp = dx_raw
         .checked_mul(rate_i)
         .ok_or_else(|| MathError::Overflow {
-            operation: "calculate_dy".to_string(),
+            operation: "calculate_dy_with_d".to_string(),
             inputs: vec![alloy_to_ethers(dx_raw), alloy_to_ethers(rate_i)],
             context: "dx * rates[i]".to_string(),
         })?
         .checked_div(CURVE_PRECISION)
         .ok_or_else(|| MathError::DivisionByZero {
-            operation: "calculate_dy".to_string(),
+            operation: "calculate_dy_with_d".to_string(),
             context: "dx * rates[i] / PRECISION".to_string(),
         })?;
 
@@ -619,7 +658,7 @@ pub fn calculate_dy(
     xp_modified[i] = xp_modified[i]
         .checked_add(dx_xp)
         .ok_or_else(|| MathError::Overflow {
-            operation: "calculate_dy".to_string(),
+            operation: "calculate_dy_with_d".to_string(),
             inputs: vec![alloy_to_ethers(xp[i]), alloy_to_ethers(dx_xp)],
             context: "xp[i] + dx_xp".to_string(),
         })?;
@@ -631,7 +670,7 @@ pub fn calculate_dy(
     }
 
     let delta_xp = xp[j].checked_sub(y).ok_or_else(|| MathError::Underflow {
-        operation: "calculate_dy".to_string(),
+        operation: "calculate_dy_with_d".to_string(),
         inputs: vec![alloy_to_ethers(xp[j]), alloy_to_ethers(y)],
         context: "xp[j] - y".to_string(),
     })?;
@@ -654,13 +693,13 @@ pub fn calculate_dy(
     let pre_fee_dy = numer
         .checked_mul(CURVE_PRECISION)
         .ok_or_else(|| MathError::Overflow {
-            operation: "calculate_dy".to_string(),
+            operation: "calculate_dy_with_d".to_string(),
             inputs: vec![],
             context: "numer * PRECISION".to_string(),
         })?
         .checked_div(rate_j)
         .ok_or_else(|| MathError::DivisionByZero {
-            operation: "calculate_dy".to_string(),
+            operation: "calculate_dy_with_d".to_string(),
             context: "numer * PRECISION / rates[j]".to_string(),
         })?;
 
@@ -668,18 +707,18 @@ pub fn calculate_dy(
     let fee_amt = pre_fee_dy
         .checked_mul(fee_scalar)
         .ok_or_else(|| MathError::Overflow {
-            operation: "calculate_dy".to_string(),
+            operation: "calculate_dy_with_d".to_string(),
             inputs: vec![alloy_to_ethers(pre_fee_dy), alloy_to_ethers(fee_scalar)],
             context: "fee * dy".to_string(),
         })?
         .checked_div(CURVE_FEE_DENOMINATOR)
         .ok_or_else(|| MathError::DivisionByZero {
-            operation: "calculate_dy".to_string(),
+            operation: "calculate_dy_with_d".to_string(),
             context: "fee * dy / FEE_DENOMINATOR".to_string(),
         })?;
 
     pre_fee_dy.checked_sub(fee_amt).ok_or_else(|| MathError::Underflow {
-        operation: "calculate_dy".to_string(),
+        operation: "calculate_dy_with_d".to_string(),
         inputs: vec![alloy_to_ethers(pre_fee_dy), alloy_to_ethers(fee_amt)],
         context: "dy after fee".to_string(),
     })
@@ -740,14 +779,44 @@ pub fn calculate_swap_output_from_xp(
     fee_raw: U256,
     fee_bps: u32,
 ) -> Result<U256, MathError> {
-    calculate_dy(
+    let d = calculate_d(xp, a, xp.len(), variant)?;
+    calculate_dy_with_d(
         token_in_index,
         token_out_index,
         amount_in,
-        &xp,
-        &rates,
+        xp,
+        rates,
         variant,
         a,
+        d,
+        fee_raw,
+        fee_bps,
+    )
+}
+
+/// Fast-path variant that reuses precomputed `xp`, `rates`, and `D`.
+#[inline]
+pub fn calculate_swap_output_from_xp_with_d(
+    amount_in: U256,
+    token_in_index: usize,
+    token_out_index: usize,
+    xp: &[U256],
+    rates: &[U256],
+    variant: StableswapMathVariant,
+    a: U256,
+    d: U256,
+    fee_raw: U256,
+    fee_bps: u32,
+) -> Result<U256, MathError> {
+    calculate_dy_with_d(
+        token_in_index,
+        token_out_index,
+        amount_in,
+        xp,
+        rates,
+        variant,
+        a,
+        d,
         fee_raw,
         fee_bps,
     )
@@ -774,17 +843,22 @@ pub fn calculate_curve_price(
     variant: StableswapMathVariant,
     a: U256,
 ) -> Result<U256, MathError> {
-    let dy = calculate_dy(
-        token_in_index,
-        token_out_index,
-        TEST_AMOUNT,
-        xp,
-        rates,
-        variant,
-        a,
-        ZERO,
-        0,
-    )?;
+    let d = calculate_d(xp, a, xp.len(), variant)?;
+    calculate_curve_price_with_d(token_in_index, token_out_index, xp, rates, variant, a, d)
+}
+
+/// Spot price variant that reuses precomputed invariant `D`.
+#[inline]
+pub fn calculate_curve_price_with_d(
+    token_in_index: usize,
+    token_out_index: usize,
+    xp: &[U256],
+    rates: &[U256],
+    variant: StableswapMathVariant,
+    a: U256,
+    d: U256,
+) -> Result<U256, MathError> {
+    let dy = calculate_dy_with_d(token_in_index, token_out_index, TEST_AMOUNT, xp, rates, variant, a, d, ZERO, 0)?;
 
     let price = dy * WAD / TEST_AMOUNT;
 

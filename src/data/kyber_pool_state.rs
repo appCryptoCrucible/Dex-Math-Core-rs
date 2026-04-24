@@ -29,7 +29,7 @@ pub struct KyberPoolState {
     pub liquidity: u128,
     pub reinvestment_liquidity: u128, // Kyber's fee accumulation mechanism
     pub tick_bitmap: HashMap<i32, U256>, // wordPos -> bitmap
-    pub tick_liquidity: HashMap<i32, u128>, // tick -> liquidityNet
+    pub tick_liquidity: HashMap<i32, i128>, // tick -> liquidityNet (signed)
     pub initialized_ticks: HashSet<i32>,
     pub last_update_block: u64,
 }
@@ -83,7 +83,7 @@ impl KyberPoolState {
     }
 
     /// Get liquidity at a specific tick
-    pub fn get_tick_liquidity(&self, tick: i32) -> u128 {
+    pub fn get_tick_liquidity(&self, tick: i32) -> i128 {
         self.tick_liquidity.get(&tick).copied().unwrap_or(0)
     }
 
@@ -135,11 +135,11 @@ impl KyberPoolState {
     ) {
         // Update lower tick
         let lower_entry = self.tick_liquidity.entry(tick_lower).or_insert(0);
-        *lower_entry = lower_entry.saturating_add(liquidity_delta as u128);
+        *lower_entry = lower_entry.saturating_add(liquidity_delta);
 
         // Update upper tick (negative delta)
         let upper_entry = self.tick_liquidity.entry(tick_upper).or_insert(0);
-        *upper_entry = upper_entry.saturating_sub(liquidity_delta as u128);
+        *upper_entry = upper_entry.saturating_sub(liquidity_delta);
     }
 }
 

@@ -675,7 +675,7 @@ pub fn quote_exact_input_with_hook_adapter_and_state(
     let mut current_sqrt = pool.sqrt_price_x96;
     let mut current_tick = pool.tick;
     let mut current_liquidity = pool.liquidity;
-    let mut crossed_ticks = Vec::with_capacity(pool.initialized_ticks.len().min(128));
+    let mut crossed_ticks = Vec::with_capacity(pool.initialized_ticks.len().min(8));
     let mut tick_cursor = init_tick_cursor(current_tick, &pool.initialized_ticks, zero_for_one);
     let fee_bps_u32 = fee_bps_applied.as_u32();
 
