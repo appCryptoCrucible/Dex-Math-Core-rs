@@ -161,6 +161,7 @@ fn fixture_curve() -> (CurvePoolSnapshot, usize, usize, U256) {
             balances: vec![U256::from(1_000_000_000_000u64), U256::from(1_000_000_000_000u64)],
             decimals: vec![18, 18],
             stored_rates: None,
+            precomputed_rates: None,
             variant: dex_math_core_rs::data::curve_registry::StableswapMathVariant::Vyper02ThreePool,
             amplification: U256::from(1000u64),
             fee_raw: U256::ZERO,

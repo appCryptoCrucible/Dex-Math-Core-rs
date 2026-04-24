@@ -406,6 +406,7 @@ fn main() {
             balances: vec![U256::from(reserve0_u64), U256::from(reserve1_u64)],
             decimals: vec![18, 18],
             stored_rates: None,
+            precomputed_rates: None,
             variant: StableswapMathVariant::Vyper02ThreePool,
             amplification: U256::from(amp_u64),
             fee_raw: U256::ZERO,
